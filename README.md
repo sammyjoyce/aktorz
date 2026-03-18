@@ -218,7 +218,7 @@ Commands: `deposit|<cents>|<memo>`, `withdraw|<cents>|<memo>`,
 `balance`, `statement`.
 
 ```bash
-printf 'kind: bank\nkey: acme:checking\nmessage-id: 1\ncontent-length: 24\n\ndeposit|50000|big savings' | nc localhost 7070
+printf 'kind: bank\nkey: acme:checking\nmessage-id: 1\ncontent-length: 25\n\ndeposit|50000|big savings' | nc localhost 7070
 ```
 
 ## SQLite module

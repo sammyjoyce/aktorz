@@ -140,8 +140,8 @@ pub const BankAccountService = struct {
                 return .{ .reply = try durable.OwnedBytes.clone(alloc, "error: account frozen\n") };
 
             const amount_txt = parts.next() orelse return error.InvalidCommand;
-            const memo = parts.next() orelse return error.InvalidCommand;
-            if (parts.next() != null) return error.InvalidCommand;
+            const memo = parts.rest();
+            if (memo.len == 0) return error.InvalidCommand;
 
             const amount = try std.fmt.parseUnsigned(u32, amount_txt, 10);
             if (amount == 0)
@@ -160,8 +160,8 @@ pub const BankAccountService = struct {
                 return .{ .reply = try durable.OwnedBytes.clone(alloc, "error: account frozen\n") };
 
             const amount_txt = parts.next() orelse return error.InvalidCommand;
-            const memo = parts.next() orelse return error.InvalidCommand;
-            if (parts.next() != null) return error.InvalidCommand;
+            const memo = parts.rest();
+            if (memo.len == 0) return error.InvalidCommand;
 
             const amount = try std.fmt.parseUnsigned(u32, amount_txt, 10);
             if (amount == 0)
@@ -239,8 +239,8 @@ pub const BankAccountService = struct {
 
         if (std.mem.eql(u8, op, "deposited")) {
             const amount_txt = parts.next() orelse return error.InvalidMutation;
-            const memo = parts.next() orelse return error.InvalidMutation;
-            if (parts.next() != null) return error.InvalidMutation;
+            const memo = parts.rest();
+            if (memo.len == 0) return error.InvalidMutation;
 
             const amount: i64 = try std.fmt.parseInt(i64, amount_txt, 10);
             self.balance_cents += amount;
@@ -251,8 +251,8 @@ pub const BankAccountService = struct {
 
         if (std.mem.eql(u8, op, "withdrawn")) {
             const amount_txt = parts.next() orelse return error.InvalidMutation;
-            const memo = parts.next() orelse return error.InvalidMutation;
-            if (parts.next() != null) return error.InvalidMutation;
+            const memo = parts.rest();
+            if (memo.len == 0) return error.InvalidMutation;
 
             const amount: i64 = try std.fmt.parseInt(i64, amount_txt, 10);
             self.balance_cents -= amount;
@@ -473,6 +473,38 @@ test "bank account snapshots preserve newline memos" {
     try std.testing.expectEqual(@as(u32, 1), restored.tx_count);
     try std.testing.expectEqual(@as(usize, 1), restored.recent.items.len);
     try std.testing.expectEqualStrings("rent\nbalance=0", restored.recent.items[0].memo);
+}
+
+test "bank account accepts memos containing pipe delimiters" {
+    var store = MemoryNodeStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    var runtime = durable.Runtime.init(std.testing.allocator, store.asStoreProvider(), .{
+        .snapshot_every = 64,
+    });
+    defer runtime.deinit();
+    defer runtime.shutdown() catch {};
+
+    try runtime.registerFactory("bank", durable.Factory.from(BankAccountService, BankAccountService.create));
+
+    const acct = durable.Address{ .kind = "bank", .key = "memo-pipes" };
+
+    {
+        const r = (try runtime.request(acct, 1, "deposit|100|rent|April")) orelse return error.ExpectedReply;
+        defer r.deinit();
+        try std.testing.expectEqualStrings("ok\n", r.bytes);
+    }
+    {
+        const r = (try runtime.request(acct, 2, "withdraw|40|groceries|weekly")) orelse return error.ExpectedReply;
+        defer r.deinit();
+        try std.testing.expectEqualStrings("ok\n", r.bytes);
+    }
+    {
+        const r = (try runtime.request(acct, 3, "statement")) orelse return error.ExpectedReply;
+        defer r.deinit();
+        try std.testing.expect(std.mem.indexOf(u8, r.bytes, "deposited 100 rent|April") != null);
+        try std.testing.expect(std.mem.indexOf(u8, r.bytes, "withdrawn 40 groceries|weekly") != null);
+    }
 }
 
 test "bank account lifecycle with passivation, dedup, and state guards" {
@@ -800,7 +832,7 @@ test "bank gateway round-trips requests" {
         "kind: bank\n" ++
         "key: acme:savings\n" ++
         "message-id: 1\n" ++
-        "content-length: 24\n" ++
+        "content-length: 25\n" ++
         "\n" ++
         "deposit|50000|big savings";
 

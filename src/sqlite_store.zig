@@ -437,9 +437,53 @@ fn toCInt(value: anytype) !c_int {
     return @intCast(v);
 }
 
-test "sqlite store dedupes writes and survives passivation" {
-    const CartService = durable.CartService;
+/// Minimal service for store tests. Accepts "set|<value>" and "get" commands.
+const KvService = struct {
+    alloc: Allocator,
+    value: ?[]u8 = null,
 
+    pub fn create(alloc: Allocator, address: core.Address) !*KvService {
+        _ = address;
+        const self = try alloc.create(KvService);
+        self.* = .{ .alloc = alloc };
+        return self;
+    }
+
+    pub fn destroy(self: *KvService, alloc: Allocator) void {
+        if (self.value) |v| alloc.free(v);
+        alloc.destroy(self);
+    }
+
+    pub fn loadSnapshot(self: *KvService, bytes: []const u8) !void {
+        if (self.value) |v| self.alloc.free(v);
+        self.value = try self.alloc.dupe(u8, bytes);
+    }
+
+    pub fn makeSnapshot(self: *KvService, alloc: Allocator) !core.OwnedBytes {
+        return core.OwnedBytes.clone(alloc, self.value orelse "");
+    }
+
+    pub fn decide(self: *KvService, alloc: Allocator, message: []const u8) !core.Decision {
+        if (std.mem.eql(u8, message, "get")) {
+            return .{ .reply = try core.OwnedBytes.clone(alloc, self.value orelse "") };
+        }
+        if (std.mem.startsWith(u8, message, "set|")) {
+            const val = message[4..];
+            return .{
+                .mutation = try core.OwnedBytes.clone(alloc, val),
+                .reply = try core.OwnedBytes.clone(alloc, "ok\n"),
+            };
+        }
+        return error.InvalidCommand;
+    }
+
+    pub fn apply(self: *KvService, mutation: []const u8) !void {
+        if (self.value) |v| self.alloc.free(v);
+        self.value = try self.alloc.dupe(u8, mutation);
+    }
+};
+
+test "sqlite store dedupes writes and survives passivation" {
     var store = try SQLiteNodeStore.init(std.testing.allocator, ":memory:", .{});
     defer store.deinit();
 
@@ -448,34 +492,26 @@ test "sqlite store dedupes writes and survives passivation" {
     });
     defer runtime.deinit();
 
-    try runtime.registerFactory("cart", core.Factory.from(CartService, CartService.create));
+    try runtime.registerFactory("kv", core.Factory.from(KvService, KvService.create));
 
-    const cart = core.Address{
-        .kind = "cart",
-        .key = "acme:customer-42",
-    };
+    const addr = core.Address{ .kind = "kv", .key = "item-42" };
 
-    const first = (try runtime.request(cart, 1001, "add|red-socks|2|1299")) orelse return error.ExpectedReply;
+    const first = (try runtime.request(addr, 1001, "set|hello")) orelse return error.ExpectedReply;
     defer first.deinit();
     try std.testing.expectEqualStrings("ok\n", first.bytes);
 
-    try std.testing.expect(try runtime.passivate(cart));
+    try std.testing.expect(try runtime.passivate(addr));
 
-    const duplicate = (try runtime.request(cart, 1001, "add|red-socks|2|1299")) orelse return error.ExpectedReply;
+    const duplicate = (try runtime.request(addr, 1001, "set|hello")) orelse return error.ExpectedReply;
     defer duplicate.deinit();
     try std.testing.expectEqualStrings("ok\n", duplicate.bytes);
 
-    const view = (try runtime.request(cart, 2001, "get")) orelse return error.ExpectedReply;
+    const view = (try runtime.request(addr, 2001, "get")) orelse return error.ExpectedReply;
     defer view.deinit();
-
-    try std.testing.expect(std.mem.indexOf(u8, view.bytes, "checked_out=0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, view.bytes, "total_items=2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, view.bytes, "subtotal_cents=2598") != null);
+    try std.testing.expectEqualStrings("hello", view.bytes);
 }
 
 test "sqlite store snapshots on shutdown and reopens from durable state" {
-    const CartService = durable.CartService;
-
     var gpa = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer gpa.deinit();
     const alloc = gpa.allocator();
@@ -497,14 +533,11 @@ test "sqlite store snapshots on shutdown and reopens from durable state" {
         defer runtime.deinit();
         defer runtime.shutdown() catch unreachable;
 
-        try runtime.registerFactory("cart", core.Factory.from(CartService, CartService.create));
+        try runtime.registerFactory("kv", core.Factory.from(KvService, KvService.create));
 
-        const cart = core.Address{
-            .kind = "cart",
-            .key = "acme:customer-99",
-        };
+        const addr = core.Address{ .kind = "kv", .key = "item-99" };
 
-        const reply = (try runtime.request(cart, 1, "add|green-socks|3|1500")) orelse return error.ExpectedReply;
+        const reply = (try runtime.request(addr, 1, "set|persisted-value")) orelse return error.ExpectedReply;
         defer reply.deinit();
         try std.testing.expectEqualStrings("ok\n", reply.bytes);
     }
@@ -518,18 +551,12 @@ test "sqlite store snapshots on shutdown and reopens from durable state" {
         });
         defer runtime.deinit();
 
-        try runtime.registerFactory("cart", core.Factory.from(CartService, CartService.create));
+        try runtime.registerFactory("kv", core.Factory.from(KvService, KvService.create));
 
-        const cart = core.Address{
-            .kind = "cart",
-            .key = "acme:customer-99",
-        };
+        const addr = core.Address{ .kind = "kv", .key = "item-99" };
 
-        const view = (try runtime.request(cart, 2, "get")) orelse return error.ExpectedReply;
+        const view = (try runtime.request(addr, 2, "get")) orelse return error.ExpectedReply;
         defer view.deinit();
-
-        try std.testing.expect(std.mem.indexOf(u8, view.bytes, "checked_out=0") != null);
-        try std.testing.expect(std.mem.indexOf(u8, view.bytes, "total_items=3") != null);
-        try std.testing.expect(std.mem.indexOf(u8, view.bytes, "subtotal_cents=4500") != null);
+        try std.testing.expectEqualStrings("persisted-value", view.bytes);
     }
 }

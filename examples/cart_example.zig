@@ -1,6 +1,6 @@
 const std = @import("std");
-const durable = @import("core.zig");
-const MemoryNodeStore = @import("memory_store.zig").MemoryNodeStore;
+const durable = @import("durable_actor");
+const MemoryNodeStore = durable.MemoryNodeStore;
 
 const Allocator = std.mem.Allocator;
 
@@ -226,4 +226,51 @@ test "cart runtime dedupes writes and survives passivation" {
     try std.testing.expect(std.mem.indexOf(u8, view.bytes, "checked_out=0") != null);
     try std.testing.expect(std.mem.indexOf(u8, view.bytes, "total_items=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, view.bytes, "subtotal_cents=2598") != null);
+}
+
+test "cart gateway round-trips requests" {
+    const TinyGateway = durable.TinyGateway;
+
+    var store = MemoryNodeStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    var runtime = durable.Runtime.init(std.testing.allocator, store.asStoreProvider(), .{
+        .snapshot_every = 1,
+    });
+    defer runtime.deinit();
+
+    try runtime.registerFactory("cart", durable.Factory.from(CartService, CartService.create));
+
+    var gateway = TinyGateway.init(std.testing.allocator, &runtime, .{});
+
+    const add_request =
+        "kind: cart\n" ++
+        "key: acme:customer-42\n" ++
+        "message-id: 1\n" ++
+        "content-length: 20\n" ++
+        "\n" ++
+        "add|red-socks|2|1299";
+
+    const add_response = try gateway.handleBytes(add_request);
+    defer add_response.deinit();
+    try std.testing.expectEqualStrings(
+        "status: ok\ncontent-length: 3\n\n" ++ "ok\n",
+        add_response.bytes,
+    );
+
+    const get_request =
+        "kind: cart\n" ++
+        "key: acme:customer-42\n" ++
+        "message-id: 2\n" ++
+        "content-length: 3\n" ++
+        "\n" ++
+        "get";
+
+    const get_response = try gateway.handleBytes(get_request);
+    defer get_response.deinit();
+
+    try std.testing.expect(std.mem.startsWith(u8, get_response.bytes, "status: ok\ncontent-length: "));
+    try std.testing.expect(std.mem.indexOf(u8, get_response.bytes, "checked_out=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, get_response.bytes, "total_items=2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, get_response.bytes, "subtotal_cents=2598") != null);
 }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const durable = @import("durable_actor");
-const CartService = @import("cart_example.zig").CartService;
+const BankAccountService = @import("bank_example.zig").BankAccountService;
 
 pub fn main() !void {
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -16,7 +16,7 @@ pub fn main() !void {
     defer runtime.deinit();
     defer runtime.shutdown() catch unreachable;
 
-    try runtime.registerFactory("cart", durable.Factory.from(CartService, CartService.create));
+    try runtime.registerFactory("bank", durable.Factory.from(BankAccountService, BankAccountService.create));
 
     var threaded = std.Io.Threaded.init_single_threaded;
     const io = threaded.io();
@@ -31,14 +31,25 @@ pub fn main() !void {
     };
 
     std.debug.print(
-        "cart gateway listening on 0.0.0.0:7070\n" ++
+        "bank gateway listening on 0.0.0.0:7070\n" ++
             "protocol:\n" ++
-            "  kind: cart\\n" ++
-            "  key: acme:customer-42\\n" ++
-            "  message-id: 1\\n" ++
-            "  content-length: 20\\n" ++
-            "  \\n" ++
-            "  add|red-socks|2|1299\n",
+            "  kind: bank\\n\n" ++
+            "  key: <account-id>\\n\n" ++
+            "  message-id: <id>\\n\n" ++
+            "  content-length: <len>\\n\n" ++
+            "  \\n\n" ++
+            "  <command>\n" ++
+            "commands:\n" ++
+            "  deposit|<cents>|<memo>\n" ++
+            "  withdraw|<cents>|<memo>\n" ++
+            "  set_overdraft|<cents>\n" ++
+            "  freeze|<reason>\n" ++
+            "  unfreeze\n" ++
+            "  close\n" ++
+            "  balance\n" ++
+            "  statement\n" ++
+            "example:\n" ++
+            "  printf 'kind: bank\\nkey: acme:checking\\nmessage-id: 1\\ncontent-length: 24\\n\\ndeposit|50000|big savings' | nc localhost 7070\n",
         .{},
     );
 

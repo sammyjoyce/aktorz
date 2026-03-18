@@ -26,6 +26,14 @@ A mutable command is handled in this order:
 
 That means service logic stays serialized and retry-safe without lock confetti.
 
+## Requirements
+
+Zig 0.16.0-dev.2905 or later. A nix flake is included for convenience:
+
+```bash
+nix develop
+```
+
 ## Add it to another Zig project
 
 `build.zig.zon`:
@@ -33,10 +41,11 @@ That means service logic stays serialized and retry-safe without lock confetti.
 ```zig
 .{
     .name = .my_app,
+    .fingerprint = 0x<your_fingerprint>,
     .version = "0.1.0",
     .dependencies = .{
-        .durable_actor = .{
-            .path = "../durable_actor_pkg",
+        .aktorz = .{
+            .path = "../aktorz",
         },
     },
     .paths = .{ "" },
@@ -54,7 +63,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const durable_dep = b.dependency("durable_actor", .{
+    const durable_dep = b.dependency("aktorz", .{
         .target = target,
         .optimize = optimize,
     });
@@ -84,7 +93,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const durable_dep = b.dependency("durable_actor", .{
+    const durable_dep = b.dependency("aktorz", .{
         .target = target,
         .optimize = optimize,
     });
@@ -100,8 +109,8 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addImport("durable_actor", durable_dep.module("durable_actor"));
     exe.root_module.addImport("durable_actor_sqlite", durable_dep.module("durable_actor_sqlite"));
-    exe.linkLibC();
-    exe.linkSystemLibrary("sqlite3");
+    exe.root_module.link_libc = true;
+    exe.root_module.linkSystemLibrary("sqlite3", .{});
 
     b.installArtifact(exe);
 }
@@ -115,7 +124,7 @@ const durable_sqlite = @import("durable_actor_sqlite");
 const std = @import("std");
 
 pub fn main() !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 
@@ -173,19 +182,25 @@ One connection carries one request. That keeps the gateway small enough to embed
 
 ## Included examples
 
-In-memory cart gateway:
+In-memory cart gateway (listens on port 7070):
 
 ```bash
 zig build cart-gateway
 ```
 
-SQLite-backed cart gateway:
+SQLite-backed cart gateway (listens on port 7070):
 
 ```bash
 zig build cart-sqlite-gateway -- actors.sqlite3
 ```
 
 That second example uses `actors.sqlite3` as the on-disk store path when you pass it as the first runtime argument.
+
+Test with `nc`:
+
+```bash
+printf 'kind: cart\nkey: acme:customer-42\nmessage-id: 1\ncontent-length: 20\n\nadd|red-socks|2|1299' | nc localhost 7070
+```
 
 ## SQLite module
 

@@ -39,8 +39,8 @@ Using `BEGIN IMMEDIATE` asks SQLite for the write lock at transaction start inst
 Consumers using `durable_actor_sqlite` need:
 
 - `@import("durable_actor_sqlite")`
-- `linkLibC()`
-- `linkSystemLibrary("sqlite3")`
+- `root_module.link_libc = true`
+- `root_module.linkSystemLibrary("sqlite3", .{})`
 
 The package build already wires that up for:
 

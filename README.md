@@ -11,7 +11,7 @@ It keeps the transport and storage details pluggable:
 - `MemoryNodeStore` is included for tests and local demos.
 - `TinyGateway` and `TcpGateway` provide a minimal framed TCP gateway.
 - `CartService` is included as a concrete example service.
-- `SQLiteNodeStore` now ships in the separate `durable_actor_sqlite` module.
+- `SQLiteNodeStore` lives in the separate `durable_actor_sqlite` module.
 
 ## What the runtime guarantees
 
@@ -194,7 +194,7 @@ SQLite-backed cart gateway (listens on port 7070):
 zig build cart-sqlite-gateway -- actors.sqlite3
 ```
 
-That second example uses `actors.sqlite3` as the on-disk store path when you pass it as the first runtime argument.
+Pass the DB path as the first argument. Defaults to `actors.sqlite3`.
 
 Test with `nc`:
 
@@ -219,7 +219,7 @@ const durable_sqlite = @import("durable_actor_sqlite");
 var store = try durable_sqlite.SQLiteNodeStore.init(gpa, "actors.sqlite3", .{});
 ```
 
-The backend automatically bootstraps the schema on startup.
+The schema is created on first open.
 
 Included docs:
 
@@ -244,4 +244,4 @@ zig build sqlite-test
 
 `deinit()` only releases in-memory resources. Call `shutdown()` first when you want active services snapshotted and passivated cleanly.
 
-`actor_seen_message` is intentionally retained so old retries can still be recognized as duplicates. That preserves safety, but it also means idempotency history grows unless you decide on an application-specific retention policy.
+`actor_seen_message` is intentionally retained so old retries are still recognized as duplicates. Idempotency history grows over time unless you pick a retention policy.

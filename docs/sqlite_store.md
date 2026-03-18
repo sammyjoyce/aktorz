@@ -1,8 +1,8 @@
 # SQLite store
 
-The package now includes a real SQLite-backed store implementation in `src/sqlite_store.zig`.
+SQLite-backed store implementation lives in `src/sqlite_store.zig`.
 
-The SQLite pieces live in a **separate Zig module** named `durable_actor_sqlite` so projects that only want the pure-Zig runtime do not have to pull SQLite headers and linker flags into every build.
+The SQLite pieces live in a separate Zig module named `durable_actor_sqlite` so projects that only want the pure-Zig runtime do not have to pull SQLite headers and linker flags into every build.
 
 ## What it implements
 
@@ -49,8 +49,8 @@ The package build already wires that up for:
 
 ## Schema
 
-The canonical schema is in `docs/sqlite_schema.sql` and is also embedded directly into `SQLiteNodeStore.init()` for automatic bootstrapping.
+The schema is in `docs/sqlite_schema.sql` and also embedded in `SQLiteNodeStore.init()`, which runs it on first open.
 
 ## Caveat
 
-`actor_seen_message` is intentionally not compacted away, because doing so would weaken duplicate suppression for old retries. That is the correct default for safety, but it means idempotency history grows unless you design a retention policy that matches your product semantics.
+`actor_seen_message` is intentionally not compacted, because doing so would weaken duplicate suppression for old retries. Safe default, but idempotency history grows unless you design a retention policy that fits your product.

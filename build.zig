@@ -31,8 +31,28 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run durable_actor unit tests");
+    const test_step = b.step("test", "Run unit tests (core + examples)");
     test_step.dependOn(&run_unit_tests.step);
+
+    const cart_example_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/cart_example.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    cart_example_tests.root_module.addImport("durable_actor", durable_module);
+    test_step.dependOn(&b.addRunArtifact(cart_example_tests).step);
+
+    const bank_example_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/bank_example.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    bank_example_tests.root_module.addImport("durable_actor", durable_module);
+    test_step.dependOn(&b.addRunArtifact(bank_example_tests).step);
 
     const sqlite_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -87,4 +107,23 @@ pub fn build(b: *std.Build) void {
 
     const sqlite_gateway_step = b.step("cart-sqlite-gateway", "Run the cart TCP gateway backed by SQLite");
     sqlite_gateway_step.dependOn(&run_sqlite_gateway.step);
+
+    const bank_gateway_example = b.addExecutable(.{
+        .name = "bank_tcp_gateway",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/bank_tcp_gateway.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    bank_gateway_example.root_module.addImport("durable_actor", durable_module);
+    b.installArtifact(bank_gateway_example);
+
+    const run_bank_gateway = b.addRunArtifact(bank_gateway_example);
+    if (b.args) |args| {
+        run_bank_gateway.addArgs(args);
+    }
+
+    const bank_gateway_step = b.step("bank-gateway", "Run the bank account TCP gateway example");
+    bank_gateway_step.dependOn(&run_bank_gateway.step);
 }

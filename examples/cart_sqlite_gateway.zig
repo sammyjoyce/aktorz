@@ -1,6 +1,7 @@
 const std = @import("std");
 const durable = @import("durable_actor");
 const durable_sqlite = @import("durable_actor_sqlite");
+const CartService = @import("cart_example.zig").CartService;
 
 pub fn main(init: std.process.Init.Minimal) !void {
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
@@ -24,7 +25,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer runtime.deinit();
     defer runtime.shutdown() catch unreachable;
 
-    try runtime.registerFactory("cart", durable.Factory.from(durable.CartService, durable.CartService.create));
+    try runtime.registerFactory("cart", durable.Factory.from(CartService, CartService.create));
 
     var threaded = std.Io.Threaded.init_single_threaded;
     const io = threaded.io();

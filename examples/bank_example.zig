@@ -70,6 +70,11 @@ pub const BankAccountService = struct {
         while (lines.next()) |line| {
             if (line.len == 0) continue;
 
+            if (std.mem.startsWith(u8, line, "txe:")) {
+                try self.loadEscapedTxLine(line[4..]);
+                continue;
+            }
+
             if (std.mem.startsWith(u8, line, "tx:")) {
                 try self.loadTxLine(line[3..]);
                 continue;
@@ -108,15 +113,7 @@ pub const BankAccountService = struct {
         try appendKeyVal(&out, alloc, "tx_count", txt);
 
         for (self.recent.items) |rec| {
-            try out.appendSlice(alloc, "tx:");
-            try out.appendSlice(alloc, rec.kind);
-            try out.appendSlice(alloc, "|");
-            var amt_buf: [32]u8 = undefined;
-            const amt_txt = try std.fmt.bufPrint(&amt_buf, "{d}", .{rec.amount_cents});
-            try out.appendSlice(alloc, amt_txt);
-            try out.appendSlice(alloc, "|");
-            try out.appendSlice(alloc, rec.memo);
-            try out.appendSlice(alloc, "\n");
+            try appendEscapedTxLine(&out, alloc, rec);
         }
 
         return .fromOwned(alloc, try out.toOwnedSlice(alloc));
@@ -322,6 +319,23 @@ pub const BankAccountService = struct {
         const memo = parts.next() orelse return error.InvalidSnapshot;
         if (parts.next() != null) return error.InvalidSnapshot;
 
+        try self.appendSnapshotTx(kind, amount_txt, memo);
+    }
+
+    fn loadEscapedTxLine(self: *BankAccountService, line: []const u8) !void {
+        var parts = std.mem.splitScalar(u8, line, '|');
+        const kind = parts.first();
+        const amount_txt = parts.next() orelse return error.InvalidSnapshot;
+        const memo_txt = parts.next() orelse return error.InvalidSnapshot;
+        if (parts.next() != null) return error.InvalidSnapshot;
+
+        const memo = try decodeSnapshotMemo(self.alloc, memo_txt);
+        defer self.alloc.free(memo);
+
+        try self.appendSnapshotTx(kind, amount_txt, memo);
+    }
+
+    fn appendSnapshotTx(self: *BankAccountService, kind: []const u8, amount_txt: []const u8, memo: []const u8) !void {
         const kind_dup = try self.alloc.dupe(u8, kind);
         errdefer self.alloc.free(kind_dup);
         const memo_dup = try self.alloc.dupe(u8, memo);
@@ -332,6 +346,58 @@ pub const BankAccountService = struct {
             .amount_cents = try std.fmt.parseInt(i64, amount_txt, 10),
             .memo = memo_dup,
         });
+    }
+
+    fn appendEscapedTxLine(out: *std.ArrayList(u8), alloc: Allocator, rec: TxRecord) !void {
+        try out.appendSlice(alloc, "txe:");
+        try out.appendSlice(alloc, rec.kind);
+        try out.appendSlice(alloc, "|");
+
+        var amt_buf: [32]u8 = undefined;
+        const amt_txt = try std.fmt.bufPrint(&amt_buf, "{d}", .{rec.amount_cents});
+        try out.appendSlice(alloc, amt_txt);
+        try out.appendSlice(alloc, "|");
+        try appendSnapshotMemo(out, alloc, rec.memo);
+        try out.appendSlice(alloc, "\n");
+    }
+
+    fn appendSnapshotMemo(out: *std.ArrayList(u8), alloc: Allocator, memo: []const u8) !void {
+        for (memo) |byte| {
+            switch (byte) {
+                '\\' => try out.appendSlice(alloc, "\\\\"),
+                '\n' => try out.appendSlice(alloc, "\\n"),
+                '\r' => try out.appendSlice(alloc, "\\r"),
+                '|' => try out.appendSlice(alloc, "\\p"),
+                else => try out.append(alloc, byte),
+            }
+        }
+    }
+
+    fn decodeSnapshotMemo(alloc: Allocator, encoded: []const u8) ![]u8 {
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(alloc);
+
+        var i: usize = 0;
+        while (i < encoded.len) : (i += 1) {
+            const byte = encoded[i];
+            if (byte != '\\') {
+                try out.append(alloc, byte);
+                continue;
+            }
+
+            i += 1;
+            if (i >= encoded.len) return error.InvalidSnapshot;
+
+            switch (encoded[i]) {
+                '\\' => try out.append(alloc, '\\'),
+                'n' => try out.append(alloc, '\n'),
+                'r' => try out.append(alloc, '\r'),
+                'p' => try out.append(alloc, '|'),
+                else => return error.InvalidSnapshot,
+            }
+        }
+
+        return try out.toOwnedSlice(alloc);
     }
 
     fn renderBalance(self: *BankAccountService, alloc: Allocator) !durable.OwnedBytes {
@@ -382,6 +448,28 @@ pub const BankAccountService = struct {
 };
 
 // ── tests ──
+
+test "bank account snapshots preserve newline memos" {
+    const address = durable.Address{ .kind = "bank", .key = "newline-memo" };
+
+    const account = try BankAccountService.create(std.testing.allocator, address);
+    defer account.destroy(std.testing.allocator);
+
+    try account.apply("deposited|100|rent\nbalance=0");
+
+    const snapshot = try account.makeSnapshot(std.testing.allocator);
+    defer snapshot.deinit();
+
+    const restored = try BankAccountService.create(std.testing.allocator, address);
+    defer restored.destroy(std.testing.allocator);
+
+    try restored.loadSnapshot(snapshot.bytes);
+
+    try std.testing.expectEqual(@as(i64, 100), restored.balance_cents);
+    try std.testing.expectEqual(@as(u32, 1), restored.tx_count);
+    try std.testing.expectEqual(@as(usize, 1), restored.recent.items.len);
+    try std.testing.expectEqualStrings("rent\nbalance=0", restored.recent.items[0].memo);
+}
 
 test "bank account lifecycle with passivation, dedup, and state guards" {
     var store = MemoryNodeStore.init(std.testing.allocator);

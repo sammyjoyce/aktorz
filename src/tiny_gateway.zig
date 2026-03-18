@@ -170,10 +170,8 @@ pub const TcpGateway = struct {
 
     /// Sequential, single-threaded accept loop. One request per connection.
     pub fn serveForever(self: *TcpGateway, address: Io.net.IpAddress) !void {
-        var server = try Io.net.listen(address, self.io, .{
+        var server = try address.listen(self.io, .{
             .reuse_address = true,
-            .mode = .stream,
-            .protocol = .tcp,
         });
         defer server.deinit(self.io);
 

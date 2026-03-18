@@ -2,7 +2,7 @@ const std = @import("std");
 const durable = @import("durable_actor");
 
 pub fn main() !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 

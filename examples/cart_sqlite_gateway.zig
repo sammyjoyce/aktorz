@@ -2,15 +2,14 @@ const std = @import("std");
 const durable = @import("durable_actor");
 const durable_sqlite = @import("durable_actor_sqlite");
 
-pub fn main() !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init.Minimal) !void {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
-
-    const db_path = if (args.len > 1) args[1] else "actors.sqlite3";
+    var args_it = std.process.Args.Iterator.init(init.args);
+    _ = args_it.next(); // skip program name
+    const db_path = args_it.next() orelse "actors.sqlite3";
 
     var store = try durable_sqlite.SQLiteNodeStore.init(gpa, db_path, .{
         .busy_timeout_ms = 5_000,

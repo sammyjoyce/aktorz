@@ -58,12 +58,12 @@ const MemoryScopedStore = struct {
     alloc: Allocator,
     object: *StoredObject,
 
-    fn destroy(self: *MemoryScopedStore, alloc: Allocator) void {
+    pub fn destroy(self: *MemoryScopedStore, alloc: Allocator) void {
         _ = self.alloc;
         alloc.destroy(self);
     }
 
-    fn loadSnapshot(self: *MemoryScopedStore, alloc: Allocator) !?core.ScopedStore.Snapshot {
+    pub fn loadSnapshot(self: *MemoryScopedStore, alloc: Allocator) !?core.ScopedStore.Snapshot {
         if (self.object.snapshot) |snapshot| {
             return .{
                 .last_seq = snapshot.seq,
@@ -73,7 +73,7 @@ const MemoryScopedStore = struct {
         return null;
     }
 
-    fn replayAfter(self: *MemoryScopedStore, after_seq: u64, replay_ctx: *anyopaque, replay_fn: core.ScopedStore.ReplayFn) !void {
+    pub fn replayAfter(self: *MemoryScopedStore, after_seq: u64, replay_ctx: *anyopaque, replay_fn: core.ScopedStore.ReplayFn) !void {
         for (self.object.wal.items) |entry| {
             if (entry.seq > after_seq) {
                 try replay_fn(replay_ctx, entry.seq, entry.mutation);
@@ -81,7 +81,7 @@ const MemoryScopedStore = struct {
         }
     }
 
-    fn appendOnce(self: *MemoryScopedStore, alloc: Allocator, intent: core.ScopedStore.AppendIntent) !core.ScopedStore.AppendResult {
+    pub fn appendOnce(self: *MemoryScopedStore, alloc: Allocator, intent: core.ScopedStore.AppendIntent) !core.ScopedStore.AppendResult {
         if (self.object.seen.get(intent.message_id)) |seen| {
             return .{ .duplicate = if (seen.reply) |reply| try core.OwnedBytes.clone(alloc, reply) else null };
         }
@@ -110,7 +110,7 @@ const MemoryScopedStore = struct {
         return .inserted;
     }
 
-    fn writeSnapshot(self: *MemoryScopedStore, at_seq: u64, bytes: []const u8) !void {
+    pub fn writeSnapshot(self: *MemoryScopedStore, at_seq: u64, bytes: []const u8) !void {
         const copy = try self.object.alloc.dupe(u8, bytes);
         errdefer self.object.alloc.free(copy);
 
@@ -124,7 +124,7 @@ const MemoryScopedStore = struct {
         };
     }
 
-    fn compactBefore(self: *MemoryScopedStore, first_live_seq: u64) !void {
+    pub fn compactBefore(self: *MemoryScopedStore, first_live_seq: u64) !void {
         while (self.object.wal.items.len > 0 and self.object.wal.items[0].seq < first_live_seq) {
             const removed = self.object.wal.orderedRemove(0);
             self.object.alloc.free(removed.mutation);

@@ -167,7 +167,7 @@ pub const BankAccountService = struct {
             if (amount == 0)
                 return .{ .reply = try durable.OwnedBytes.clone(alloc, "error: amount must be > 0\n") };
 
-            const available = self.balance_cents + self.overdraft_limit_cents;
+            const available = self.availableCents();
             if (available < @as(i64, @intCast(amount)))
                 return .{ .reply = try durable.OwnedBytes.clone(alloc, "error: insufficient funds\n") };
 
@@ -192,11 +192,11 @@ pub const BankAccountService = struct {
         }
 
         if (std.mem.eql(u8, op, "freeze")) {
-            if (self.status != .active)
-                return .{ .reply = .fromOwned(alloc, try std.fmt.allocPrint(alloc, "error: cannot freeze, status is {s}\n", .{@tagName(self.status)})) };
-
             const reason = parts.next() orelse return error.InvalidCommand;
             if (parts.next() != null) return error.InvalidCommand;
+
+            if (self.status == .closed)
+                return .{ .reply = .fromOwned(alloc, try std.fmt.allocPrint(alloc, "error: cannot freeze, status is {s}\n", .{@tagName(self.status)})) };
 
             return .{
                 .mutation = .fromOwned(alloc, try std.fmt.allocPrint(alloc, "account_frozen|{s}", .{reason})),
@@ -206,8 +206,8 @@ pub const BankAccountService = struct {
 
         if (std.mem.eql(u8, op, "unfreeze")) {
             if (parts.next() != null) return error.InvalidCommand;
-            if (self.status != .frozen)
-                return .{ .reply = try durable.OwnedBytes.clone(alloc, "error: account is not frozen\n") };
+            if (self.status == .closed)
+                return .{ .reply = .fromOwned(alloc, try std.fmt.allocPrint(alloc, "error: cannot unfreeze, status is {s}\n", .{@tagName(self.status)})) };
 
             return .{
                 .mutation = try durable.OwnedBytes.clone(alloc, "account_unfrozen"),
@@ -217,9 +217,9 @@ pub const BankAccountService = struct {
 
         if (std.mem.eql(u8, op, "close")) {
             if (parts.next() != null) return error.InvalidCommand;
-            if (self.status != .active)
+            if (self.status == .frozen)
                 return .{ .reply = .fromOwned(alloc, try std.fmt.allocPrint(alloc, "error: cannot close, status is {s}\n", .{@tagName(self.status)})) };
-            if (self.balance_cents != 0)
+            if (self.status == .active and self.balance_cents != 0)
                 return .{ .reply = try durable.OwnedBytes.clone(alloc, "error: balance must be zero to close\n") };
 
             return .{
@@ -400,11 +400,15 @@ pub const BankAccountService = struct {
         return try out.toOwnedSlice(alloc);
     }
 
+    fn availableCents(self: *BankAccountService) i64 {
+        return if (self.status == .closed) 0 else self.balance_cents + self.overdraft_limit_cents;
+    }
+
     fn renderBalance(self: *BankAccountService, alloc: Allocator) !durable.OwnedBytes {
         return .fromOwned(alloc, try std.fmt.allocPrint(
             alloc,
             "status={s}\nbalance_cents={d}\navailable_cents={d}\n",
-            .{ @tagName(self.status), self.balance_cents, self.balance_cents + self.overdraft_limit_cents },
+            .{ @tagName(self.status), self.balance_cents, self.availableCents() },
         ));
     }
 
@@ -419,7 +423,7 @@ pub const BankAccountService = struct {
                 @tagName(self.status),
                 self.balance_cents,
                 self.overdraft_limit_cents,
-                self.balance_cents + self.overdraft_limit_cents,
+                self.availableCents(),
                 self.tx_count,
             },
         );
@@ -581,6 +585,11 @@ test "bank account lifecycle with passivation, dedup, and state guards" {
         try std.testing.expectEqualStrings("ok\n", r.bytes);
     }
     {
+        const r = (try runtime.request(acct, 6, "freeze|suspicious activity")) orelse return error.ExpectedReply;
+        defer r.deinit();
+        try std.testing.expectEqualStrings("ok\n", r.bytes);
+    }
+    {
         const r = (try runtime.request(acct, 7, "withdraw|100|attempt")) orelse return error.ExpectedReply;
         defer r.deinit();
         try std.testing.expectEqualStrings("error: account frozen\n", r.bytes);
@@ -606,6 +615,11 @@ test "bank account lifecycle with passivation, dedup, and state guards" {
         defer r.deinit();
         try std.testing.expectEqualStrings("ok\n", r.bytes);
     }
+    {
+        const r = (try runtime.request(acct, 9, "unfreeze")) orelse return error.ExpectedReply;
+        defer r.deinit();
+        try std.testing.expectEqualStrings("ok\n", r.bytes);
+    }
 
     // ── close (balance is 0) ──
 
@@ -613,6 +627,18 @@ test "bank account lifecycle with passivation, dedup, and state guards" {
         const r = (try runtime.request(acct, 10, "close")) orelse return error.ExpectedReply;
         defer r.deinit();
         try std.testing.expectEqualStrings("ok\n", r.bytes);
+    }
+    {
+        const r = (try runtime.request(acct, 10, "close")) orelse return error.ExpectedReply;
+        defer r.deinit();
+        try std.testing.expectEqualStrings("ok\n", r.bytes);
+    }
+
+    {
+        const r = (try runtime.request(acct, 203, "balance")) orelse return error.ExpectedReply;
+        defer r.deinit();
+        try std.testing.expect(std.mem.indexOf(u8, r.bytes, "status=closed") != null);
+        try std.testing.expect(std.mem.indexOf(u8, r.bytes, "available_cents=0") != null);
     }
 
     // ── operations on closed account fail ──
@@ -630,6 +656,7 @@ test "bank account lifecycle with passivation, dedup, and state guards" {
         defer r.deinit();
         try std.testing.expect(std.mem.indexOf(u8, r.bytes, "status=closed") != null);
         try std.testing.expect(std.mem.indexOf(u8, r.bytes, "balance_cents=0") != null);
+        try std.testing.expect(std.mem.indexOf(u8, r.bytes, "available_cents=0") != null);
         try std.testing.expect(std.mem.indexOf(u8, r.bytes, "deposited 10000 opening deposit") != null);
         try std.testing.expect(std.mem.indexOf(u8, r.bytes, "withdrawn 16000 big purchase") != null);
         try std.testing.expect(std.mem.indexOf(u8, r.bytes, "deposited 1000 top up") != null);

@@ -26,11 +26,11 @@ pub fn main() !void {
 
     var tcp = durable.TcpGateway.init(gpa, io, &gateway, .{});
     const bind = std.Io.net.IpAddress{
-        .ip4 = std.Io.net.Ip4Address.unspecified(7000),
+        .ip4 = std.Io.net.Ip4Address.unspecified(7070),
     };
 
     std.debug.print(
-        "cart gateway listening on 0.0.0.0:7000\n" ++
+        "cart gateway listening on 0.0.0.0:7070\n" ++
             "protocol:\n" ++
             "  kind: cart\\n" ++
             "  key: acme:customer-42\\n" ++

@@ -11,6 +11,7 @@ It keeps the transport and storage details pluggable:
 - `MemoryNodeStore` is included for tests and local demos.
 - `TinyGateway` and `TcpGateway` provide a minimal framed TCP gateway.
 - `CartService` is included as a concrete example service.
+- `BankAccountService` is a richer example with state-machine transitions, overdraft logic, and bounded transaction history.
 - `SQLiteNodeStore` lives in the separate `durable_actor_sqlite` module.
 
 ## What the runtime guarantees
@@ -137,20 +138,21 @@ pub fn main() !void {
     defer runtime.deinit();
     defer runtime.shutdown() catch unreachable;
 
-    try runtime.registerFactory("cart", durable.Factory.from(durable.CartService, durable.CartService.create));
+    // Define your own service or copy one from the examples/ directory.
+    // See examples/cart_example.zig and examples/bank_example.zig.
+    const MyService = @import("my_service.zig").MyService;
 
-    const cart = durable.Address{
-        .kind = "cart",
-        .key = "acme:customer-42",
+    try runtime.registerFactory("my_kind", durable.Factory.from(MyService, MyService.create));
+
+    const addr = durable.Address{
+        .kind = "my_kind",
+        .key = "tenant:entity-42",
     };
 
-    const add_reply = (try runtime.request(cart, 1, "add|red-socks|2|1299")).?;
-    defer add_reply.deinit();
+    const reply = (try runtime.request(addr, 1, "some-command|arg")).?;
+    defer reply.deinit();
 
-    const view = (try runtime.request(cart, 2, "get")).?;
-    defer view.deinit();
-
-    std.debug.print("{s}", .{view.bytes});
+    std.debug.print("{s}", .{reply.bytes});
 }
 ```
 
@@ -200,6 +202,23 @@ Test with `nc`:
 
 ```bash
 printf 'kind: cart\nkey: acme:customer-42\nmessage-id: 1\ncontent-length: 20\n\nadd|red-socks|2|1299' | nc localhost 7070
+```
+
+### Bank account gateway
+
+A richer example that exercises state-machine transitions (active/frozen/closed),
+overdraft protection, bounded recent-transaction history, and snapshot round-trips.
+
+```bash
+zig build bank-gateway
+```
+
+Commands: `deposit|<cents>|<memo>`, `withdraw|<cents>|<memo>`,
+`set_overdraft|<cents>`, `freeze|<reason>`, `unfreeze`, `close`,
+`balance`, `statement`.
+
+```bash
+printf 'kind: bank\nkey: acme:checking\nmessage-id: 1\ncontent-length: 25\n\ndeposit|50000|big savings' | nc localhost 7070
 ```
 
 ## SQLite module

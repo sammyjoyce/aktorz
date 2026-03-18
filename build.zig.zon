@@ -1,5 +1,6 @@
 .{
     .name = .aktorz,
+    .fingerprint = 0x968703806a6e24e0,
     .version = "0.3.0",
     .minimum_zig_version = "0.16.0-dev.2905",
     .dependencies = .{},

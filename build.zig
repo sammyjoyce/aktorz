@@ -1,8 +1,8 @@
 const std = @import("std");
 
-fn linkSqlite(artifact: *std.Build.Step.Compile) void {
-    artifact.linkLibC();
-    artifact.linkSystemLibrary("sqlite3");
+fn linkSqlite(mod: *std.Build.Module) void {
+    mod.link_libc = true;
+    mod.linkSystemLibrary("sqlite3", .{});
 }
 
 pub fn build(b: *std.Build) void {
@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     sqlite_tests.root_module.addImport("durable_actor", durable_module);
-    linkSqlite(sqlite_tests);
+    linkSqlite(sqlite_tests.root_module);
 
     const run_sqlite_tests = b.addRunArtifact(sqlite_tests);
     const sqlite_test_step = b.step("sqlite-test", "Run SQLite-backed durable_actor tests");
@@ -77,7 +77,7 @@ pub fn build(b: *std.Build) void {
     });
     sqlite_gateway_example.root_module.addImport("durable_actor", durable_module);
     sqlite_gateway_example.root_module.addImport("durable_actor_sqlite", sqlite_module);
-    linkSqlite(sqlite_gateway_example);
+    linkSqlite(sqlite_gateway_example.root_module);
     b.installArtifact(sqlite_gateway_example);
 
     const run_sqlite_gateway = b.addRunArtifact(sqlite_gateway_example);

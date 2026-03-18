@@ -164,12 +164,12 @@ const SQLiteScopedStore = struct {
     db: *c.sqlite3,
     object_id: []u8,
 
-    fn destroy(self: *SQLiteScopedStore, alloc: Allocator) void {
+    pub fn destroy(self: *SQLiteScopedStore, alloc: Allocator) void {
         alloc.free(self.object_id);
         alloc.destroy(self);
     }
 
-    fn loadSnapshot(self: *SQLiteScopedStore, alloc: Allocator) !?core.ScopedStore.Snapshot {
+    pub fn loadSnapshot(self: *SQLiteScopedStore, alloc: Allocator) !?core.ScopedStore.Snapshot {
         var stmt = try Statement.init(self.db, sql_load_snapshot);
         defer stmt.deinit();
 
@@ -188,7 +188,7 @@ const SQLiteScopedStore = struct {
         }
     }
 
-    fn replayAfter(self: *SQLiteScopedStore, after_seq: u64, replay_ctx: *anyopaque, replay_fn: core.ScopedStore.ReplayFn) !void {
+    pub fn replayAfter(self: *SQLiteScopedStore, after_seq: u64, replay_ctx: *anyopaque, replay_fn: core.ScopedStore.ReplayFn) !void {
         var stmt = try Statement.init(self.db, sql_replay_after);
         defer stmt.deinit();
 
@@ -207,7 +207,7 @@ const SQLiteScopedStore = struct {
         }
     }
 
-    fn appendOnce(self: *SQLiteScopedStore, alloc: Allocator, intent: core.ScopedStore.AppendIntent) !core.ScopedStore.AppendResult {
+    pub fn appendOnce(self: *SQLiteScopedStore, alloc: Allocator, intent: core.ScopedStore.AppendIntent) !core.ScopedStore.AppendResult {
         const message_id_buf = encodeMessageId(intent.message_id);
 
         try execLiteral(self.db, "BEGIN IMMEDIATE;");
@@ -279,7 +279,7 @@ const SQLiteScopedStore = struct {
         return .inserted;
     }
 
-    fn writeSnapshot(self: *SQLiteScopedStore, at_seq: u64, bytes: []const u8) !void {
+    pub fn writeSnapshot(self: *SQLiteScopedStore, at_seq: u64, bytes: []const u8) !void {
         var stmt = try Statement.init(self.db, sql_write_snapshot);
         defer stmt.deinit();
 
@@ -291,7 +291,7 @@ const SQLiteScopedStore = struct {
         if (rc != c.SQLITE_DONE) return sqliteError(rc);
     }
 
-    fn compactBefore(self: *SQLiteScopedStore, first_live_seq: u64) !void {
+    pub fn compactBefore(self: *SQLiteScopedStore, first_live_seq: u64) !void {
         var stmt = try Statement.init(self.db, sql_compact_wal);
         defer stmt.deinit();
 
@@ -480,9 +480,12 @@ test "sqlite store snapshots on shutdown and reopens from durable state" {
     defer gpa.deinit();
     const alloc = gpa.allocator();
 
-    const cwd = std.fs.cwd();
-    const tmp_name = try std.fmt.allocPrint(alloc, "durable-actor-sqlite-test-{d}.db", .{std.time.nanoTimestamp()});
-    defer cwd.deleteFile(tmp_name) catch {};
+    var rng = std.Random.DefaultCsprng.init(.{0} ** 32);
+    const tmp_name = try std.fmt.allocPrint(alloc, "durable-actor-sqlite-test-{x}.db", .{rng.random().int(u64)});
+    defer {
+        const z = @as([*:0]const u8, @ptrCast(tmp_name.ptr));
+        _ = std.c.unlink(z);
+    }
 
     {
         var store = try SQLiteNodeStore.init(std.testing.allocator, tmp_name, .{});

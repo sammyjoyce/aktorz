@@ -69,15 +69,37 @@ const sql_compact_wal =
     "DELETE FROM actor_wal " ++
     "WHERE object_id = ?1 AND seq < ?2";
 
+const sql_count_actor_snapshot =
+    "SELECT COUNT(*) " ++
+    "FROM actor_snapshot";
+
+const sql_count_actor_wal =
+    "SELECT COUNT(*) " ++
+    "FROM actor_wal";
+
+const sql_count_actor_seen_message =
+    "SELECT COUNT(*) " ++
+    "FROM actor_seen_message";
+
+const sql_pragma_wal_autocheckpoint =
+    "PRAGMA wal_autocheckpoint;";
+
 pub const SQLiteNodeStore = struct {
     alloc: Allocator,
     db: *c.sqlite3,
     config: Config,
 
+    pub const TableRowCounts = struct {
+        actor_snapshot: u64,
+        actor_wal: u64,
+        actor_seen_message: u64,
+    };
+
     pub const Config = struct {
         busy_timeout_ms: u32 = 5_000,
         enable_wal: bool = true,
         synchronous: Synchronous = .full,
+        wal_autocheckpoint_pages: ?u32 = null,
 
         pub const Synchronous = enum {
             off,
@@ -118,6 +140,10 @@ pub const SQLiteNodeStore = struct {
             .extra => try execLiteral(db, "PRAGMA synchronous=EXTRA;"),
         }
 
+        if (config.wal_autocheckpoint_pages) |pages| {
+            try execDynamic(db, alloc, "PRAGMA wal_autocheckpoint={d};", .{pages});
+        }
+
         try execLiteral(db, schema_sql);
 
         return .{
@@ -130,6 +156,19 @@ pub const SQLiteNodeStore = struct {
     pub fn deinit(self: *SQLiteNodeStore) void {
         _ = c.sqlite3_close_v2(self.db);
         self.* = undefined;
+    }
+
+    pub fn sampleTableRowCounts(self: *SQLiteNodeStore) !TableRowCounts {
+        return .{
+            .actor_snapshot = try querySingleU64(self.db, sql_count_actor_snapshot),
+            .actor_wal = try querySingleU64(self.db, sql_count_actor_wal),
+            .actor_seen_message = try querySingleU64(self.db, sql_count_actor_seen_message),
+        };
+    }
+
+    pub fn walAutocheckpointPages(self: *SQLiteNodeStore) !u32 {
+        const value = try querySingleU64(self.db, sql_pragma_wal_autocheckpoint);
+        return @intCast(value);
     }
 
     pub fn asStoreProvider(self: *SQLiteNodeStore) core.StoreProvider {
@@ -332,6 +371,15 @@ fn execLiteral(db: *c.sqlite3, sql: [:0]const u8) !void {
     if (rc != c.SQLITE_OK) return sqliteError(rc);
 }
 
+fn execDynamic(db: *c.sqlite3, alloc: Allocator, comptime fmt: []const u8, args: anytype) !void {
+    const sql = try std.fmt.allocPrint(alloc, fmt, args);
+    defer alloc.free(sql);
+
+    const sql_z = try alloc.dupeZ(u8, sql);
+    defer alloc.free(sql_z);
+    try execLiteral(db, sql_z);
+}
+
 fn rollback(db: *c.sqlite3) void {
     _ = c.sqlite3_exec(db, "ROLLBACK;", null, null, null);
 }
@@ -368,6 +416,16 @@ fn columnU64(stmt: *c.sqlite3_stmt, col: c_int) !u64 {
     const value = c.sqlite3_column_int64(stmt, col);
     if (value < 0) return error.InvalidSequence;
     return @intCast(value);
+}
+
+fn querySingleU64(db: *c.sqlite3, sql: []const u8) !u64 {
+    var stmt = try Statement.init(db, sql);
+    defer stmt.deinit();
+
+    return switch (try stmt.step()) {
+        .row => try columnU64(stmt.ptr, 0),
+        .done => error.MissingQueryRow,
+    };
 }
 
 fn copyColumnBlob(alloc: Allocator, stmt: *c.sqlite3_stmt, col: c_int) ![]u8 {
@@ -559,4 +617,23 @@ test "sqlite store snapshots on shutdown and reopens from durable state" {
         defer view.deinit();
         try std.testing.expectEqualStrings("persisted-value", view.bytes);
     }
+}
+
+test "sqlite store applies explicit wal autocheckpoint config" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const sqlite_path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/wal-config.sqlite3",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(sqlite_path);
+
+    var store = try SQLiteNodeStore.init(std.testing.allocator, sqlite_path, .{
+        .wal_autocheckpoint_pages = 0,
+    });
+    defer store.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), try store.walAutocheckpointPages());
 }

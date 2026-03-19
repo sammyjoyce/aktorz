@@ -39,6 +39,11 @@ const sql_load_snapshot =
     "FROM actor_snapshot " ++
     "WHERE object_id = ?1";
 
+const sql_load_snapshot_bytes =
+    "SELECT snapshot " ++
+    "FROM actor_snapshot " ++
+    "WHERE object_id = ?1";
+
 const sql_replay_after =
     "SELECT seq, mutation " ++
     "FROM actor_wal " ++
@@ -83,7 +88,6 @@ const sql_count_actor_seen_message =
 
 const sql_pragma_wal_autocheckpoint =
     "PRAGMA wal_autocheckpoint;";
-
 pub const SQLiteNodeStore = struct {
     alloc: Allocator,
     db: *c.sqlite3,
@@ -354,6 +358,14 @@ const Statement = struct {
 
     fn deinit(self: *Statement) void {
         _ = c.sqlite3_finalize(self.ptr);
+    }
+
+    fn reset(self: *Statement) !void {
+        const reset_rc = c.sqlite3_reset(self.ptr);
+        if (reset_rc != c.SQLITE_OK) return sqliteError(reset_rc);
+
+        const clear_rc = c.sqlite3_clear_bindings(self.ptr);
+        if (clear_rc != c.SQLITE_OK) return sqliteError(clear_rc);
     }
 
     fn step(self: *Statement) !enum { row, done } {

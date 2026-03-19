@@ -1,5 +1,6 @@
 const std = @import("std");
 const bench = @import("benchmark.zig");
+const cli = @import("benchmark/cli.zig");
 const histogram = @import("benchmark/histogram.zig");
 const scale = @import("benchmark/scale.zig");
 
@@ -53,6 +54,32 @@ test "resolveSqlitePaths auto generates suite paths in cache" {
     try std.testing.expect(paths.soak_path != null);
     try std.testing.expect(!std.mem.eql(u8, paths.churn_path.?, paths.reactivate_path.?));
     try std.testing.expect(!std.mem.eql(u8, paths.reactivate_path.?, paths.soak_path.?));
+}
+
+test "auto-generated suite phase paths must also be fresh" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const base_path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/bench.sqlite3",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(base_path);
+
+    const churn_path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/bench.churn.sqlite3",
+        .{tmp.sub_path},
+    );
+    defer std.testing.allocator.free(churn_path);
+
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = churn_path, .data = "stale" });
+
+    try std.testing.expectError(
+        error.SQLitePathExists,
+        cli.ensureSuitePhasePathsAreFresh(base_path),
+    );
 }
 
 test "deriveSuitePhaseDurations keeps the approved split" {

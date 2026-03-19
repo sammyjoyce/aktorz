@@ -22,16 +22,6 @@ const wal_autocheckpoint_pages: u32 = 0;
 const reactivate_cohort_cap: u64 = 128;
 const soak_sample_interval_seconds: u64 = 10;
 
-pub fn nextReactivateActorIndex(actor_count: usize, cohort_start: usize, prepared_offset: usize) usize {
-    std.debug.assert(actor_count > 0);
-    return (cohort_start + prepared_offset) % actor_count;
-}
-
-pub fn nextReactivateCohortStart(actor_count: usize, cohort_start: usize, prepared_actor_count: usize) usize {
-    std.debug.assert(actor_count > 0);
-    return (cohort_start + prepared_actor_count) % actor_count;
-}
-
 const CounterService = struct {
     alloc: Allocator,
     value: u64,
@@ -265,7 +255,6 @@ fn runChurnPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: [
             if (passivate_after_write) {
                 const passivate_start = monotonicNow(io);
                 _ = try runtime.passivate(address);
-                workload.markPassivated(actor_index);
                 passivation_time_ns += elapsedNanoseconds(passivate_start, monotonicNow(io));
                 passivation_count += 1;
             }
@@ -274,14 +263,13 @@ fn runChurnPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: [
             defer reply.deinit();
             const value = try std.fmt.parseUnsigned(u64, reply.bytes, 10);
             if (value != workload.expected[actor_index]) return error.UnexpectedReadValue;
-            workload.recordReadVerified(actor_index);
             reads += 1;
         }
 
         latencies.record(elapsedNanoseconds(op_start, monotonicNow(io)));
     }
 
-    try verifyExpectedValues(&runtime, &store, &workload);
+    try verifyExpectedValues(&runtime, &workload, .churn);
 
     const elapsed_ns = elapsedNanoseconds(start, monotonicNow(io));
     const sqlite_metrics = try sampleSqliteMetrics(io, &store, sqlite_path);
@@ -322,8 +310,6 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
     defer workload.deinit();
 
     const cohort_size: usize = @intCast(@min(config.actors, reactivate_cohort_cap));
-    const prepared_actor_indexes = try alloc.alloc(usize, cohort_size);
-    defer alloc.free(prepared_actor_indexes);
     var latencies = try histogram.LatencyHistogram.init(alloc);
     defer latencies.deinit();
 
@@ -332,49 +318,28 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
 
     const start = monotonicNow(io);
     const deadline_ns = duration_seconds * std.time.ns_per_s;
-    var measured_cohort_size: usize = 0;
-    var cohort_start: usize = 0;
-
     while (elapsedNanoseconds(start, monotonicNow(io)) < deadline_ns) {
         collector.reset();
-
-        var prepared_actor_count: usize = 0;
-        while (prepared_actor_count < cohort_size) {
-            if (elapsedNanoseconds(start, monotonicNow(io)) >= deadline_ns) break;
-
-            const actor_index = nextReactivateActorIndex(workload.addresses.len, cohort_start, prepared_actor_count);
+        var actor_index: usize = 0;
+        while (actor_index < cohort_size) : (actor_index += 1) {
             const address = workload.addresses[actor_index];
             var preload_index: u64 = 0;
             while (preload_index < config.history_preload) : (preload_index += 1) {
-                // Stop before counting a partially prepared actor in the measured batch.
-                if (elapsedNanoseconds(start, monotonicNow(io)) >= deadline_ns) break;
                 try runtime.tell(address, workload.message_ids.next(.preload), "inc");
                 workload.recordWrite(actor_index);
             }
-
-            if (preload_index < config.history_preload) break;
-
             _ = try runtime.passivate(address);
-            workload.markPassivated(actor_index);
-            prepared_actor_indexes[prepared_actor_count] = actor_index;
-            prepared_actor_count += 1;
         }
 
-        if (prepared_actor_count == 0) break;
-        cohort_start = nextReactivateCohortStart(workload.addresses.len, cohort_start, prepared_actor_count);
-        measured_cohort_size = @max(measured_cohort_size, prepared_actor_count);
-
         collector.reset();
-        var prepared_index: usize = 0;
-        while (prepared_index < prepared_actor_count) : (prepared_index += 1) {
-            const actor_index = prepared_actor_indexes[prepared_index];
+        actor_index = 0;
+        while (actor_index < cohort_size) : (actor_index += 1) {
             const address = workload.addresses[actor_index];
             const op_start = monotonicNow(io);
             const reply = (try runtime.request(address, workload.message_ids.next(.measured), "get")) orelse return error.ExpectedReply;
             defer reply.deinit();
             const value = try std.fmt.parseUnsigned(u64, reply.bytes, 10);
             if (value != workload.expected[actor_index]) return error.UnexpectedReadValue;
-            workload.recordReadVerified(actor_index);
             latencies.record(elapsedNanoseconds(op_start, monotonicNow(io)));
             cold_activation_count += 1;
         }
@@ -382,12 +347,13 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
         accumulateStoreCounters(&measured_store_counters, collector.snapshot());
     }
 
-    try verifyExpectedValues(&runtime, &store, &workload);
+    markCohortTouched(&workload, cohort_size);
+    try verifyExpectedValues(&runtime, &workload, .reactivate);
 
     const sqlite_metrics = try sampleSqliteMetrics(io, &store, sqlite_path);
     return .{ .reactivate = .{
         .cold_activation_count = cold_activation_count,
-        .measured_cohort_size = measured_cohort_size,
+        .measured_cohort_size = cohort_size,
         .total_actor_count = config.actors,
         .p50_latency_ns = latencies.percentile(50),
         .p95_latency_ns = latencies.percentile(95),
@@ -448,14 +414,12 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
             writes += 1;
             if (passivate_after_write) {
                 _ = try runtime.passivate(address);
-                workload.markPassivated(actor_index);
             }
         } else {
             const reply = (try runtime.request(address, workload.message_ids.next(.measured), "get")) orelse return error.ExpectedReply;
             defer reply.deinit();
             const value = try std.fmt.parseUnsigned(u64, reply.bytes, 10);
             if (value != workload.expected[actor_index]) return error.UnexpectedReadValue;
-            workload.recordReadVerified(actor_index);
             reads += 1;
         }
 
@@ -488,7 +452,7 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
         }
     }
 
-    try verifyExpectedValues(&runtime, &store, &workload);
+    try verifyExpectedValues(&runtime, &workload, .soak);
     const sqlite_metrics = try sampleSqliteMetrics(io, &store, sqlite_path);
     return .{ .soak = .{
         .total_elapsed_seconds = duration_seconds,
@@ -501,23 +465,22 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
     } };
 }
 
-fn verifyExpectedValues(runtime: *durable.Runtime, store: *durable_sqlite.SQLiteNodeStore, workload: *Workload) !void {
+fn verifyExpectedValues(runtime: *durable.Runtime, workload: *Workload, comptime phase_tag: MessageIds.PhaseTag) !void {
     var actor_index: usize = 0;
-    var lookup = try store.initBenchmarkCounterLookup();
-    defer lookup.deinit();
-
     while (actor_index < workload.addresses.len) : (actor_index += 1) {
-        if (!workload.needs_verify[actor_index]) continue;
+        if (!workload.touched[actor_index]) continue;
 
-        const value = if (workload.active[actor_index]) blk: {
-            const reply = (try runtime.request(workload.addresses[actor_index], workload.message_ids.next(.verify), "get")) orelse return error.ExpectedReply;
-            defer reply.deinit();
-            break :blk try std.fmt.parseUnsigned(u64, reply.bytes, 10);
-        } else blk: {
-            break :blk try lookup.valueForObjectId(workload.object_ids[actor_index]);
-        };
-
+        const reply = (try runtime.request(workload.addresses[actor_index], workload.message_ids.next(.verify), "get")) orelse return error.ExpectedReply;
+        defer reply.deinit();
+        const value = try std.fmt.parseUnsigned(u64, reply.bytes, 10);
         if (value != workload.expected[actor_index]) return error.UnexpectedFinalValue;
+    }
+    _ = phase_tag;
+}
+
+fn markCohortTouched(workload: *Workload, cohort_size: usize) void {
+    for (workload.touched[0..cohort_size]) |*touched| {
+        touched.* = true;
     }
 }
 
@@ -567,7 +530,7 @@ fn accumulateStoreCounters(target: *instrumentation.StoreCounters, delta: instru
 }
 
 fn freeResolvedPaths(alloc: Allocator, paths: cli.SqlitePaths) void {
-    inline for (.{ paths.base_path, paths.shared_path, paths.churn_path, paths.reactivate_path, paths.soak_path }) |maybe_path| {
+    inline for (. { paths.base_path, paths.shared_path, paths.churn_path, paths.reactivate_path, paths.soak_path }) |maybe_path| {
         if (maybe_path) |path| alloc.free(path);
     }
 }
@@ -582,11 +545,8 @@ fn selectedInputPath(mode: cli.BenchmarkMode, paths: cli.SqlitePaths) ?[]const u
 const Workload = struct {
     alloc: Allocator,
     addresses: []durable.Address,
-    object_ids: [][]const u8,
     expected: []u64,
     touched: []bool,
-    needs_verify: []bool,
-    active: []bool,
     prng: std.Random.DefaultPrng,
     write_percent: u8,
     hot_count: usize,
@@ -595,25 +555,17 @@ const Workload = struct {
     pub fn init(alloc: Allocator, actor_count: u64, seed: u64, write_percent: u8) !Workload {
         const count: usize = @intCast(actor_count);
         const addresses = try alloc.alloc(durable.Address, count);
-        errdefer alloc.free(addresses);
-
-        const object_ids = try alloc.alloc([]const u8, count);
-        errdefer alloc.free(object_ids);
-
-        var initialized: usize = 0;
         errdefer {
-            for (addresses[0..initialized]) |address| alloc.free(address.key);
-            for (object_ids[0..initialized]) |object_id| alloc.free(object_id);
+            for (addresses) |address| {
+                if (address.key.len > 0) alloc.free(address.key);
+            }
+            alloc.free(addresses);
         }
+        @memset(addresses, .{ .kind = "counter", .key = "" });
 
-        while (initialized < count) : (initialized += 1) {
-            const key = try std.fmt.allocPrint(alloc, "bench:actor-{d}", .{initialized});
-            addresses[initialized] = .{ .kind = "counter", .key = key };
-            object_ids[initialized] = try std.fmt.allocPrint(
-                alloc,
-                "{d}:{s}:{s}",
-                .{ addresses[initialized].kind.len, addresses[initialized].kind, key },
-            );
+        for (addresses, 0..) |*address, index| {
+            const key = try std.fmt.allocPrint(alloc, "bench:actor-{d}", .{index});
+            address.* = .{ .kind = "counter", .key = key };
         }
 
         const expected = try alloc.alloc(u64, count);
@@ -624,22 +576,11 @@ const Workload = struct {
         errdefer alloc.free(touched);
         @memset(touched, false);
 
-        const needs_verify = try alloc.alloc(bool, count);
-        errdefer alloc.free(needs_verify);
-        @memset(needs_verify, false);
-
-        const active = try alloc.alloc(bool, count);
-        errdefer alloc.free(active);
-        @memset(active, false);
-
         return .{
             .alloc = alloc,
             .addresses = addresses,
-            .object_ids = object_ids,
             .expected = expected,
             .touched = touched,
-            .needs_verify = needs_verify,
-            .active = active,
             .prng = std.Random.DefaultPrng.init(seed),
             .write_percent = write_percent,
             .hot_count = hotSetCount(count),
@@ -649,13 +590,9 @@ const Workload = struct {
 
     pub fn deinit(self: *Workload) void {
         for (self.addresses) |address| self.alloc.free(address.key);
-        for (self.object_ids) |object_id| self.alloc.free(object_id);
         self.alloc.free(self.addresses);
-        self.alloc.free(self.object_ids);
         self.alloc.free(self.expected);
         self.alloc.free(self.touched);
-        self.alloc.free(self.needs_verify);
-        self.alloc.free(self.active);
         self.* = undefined;
     }
 
@@ -677,17 +614,6 @@ const Workload = struct {
     pub fn recordWrite(self: *Workload, actor_index: usize) void {
         self.expected[actor_index] += 1;
         self.touched[actor_index] = true;
-        self.needs_verify[actor_index] = true;
-        self.active[actor_index] = true;
-    }
-
-    pub fn recordReadVerified(self: *Workload, actor_index: usize) void {
-        self.needs_verify[actor_index] = false;
-        self.active[actor_index] = true;
-    }
-
-    pub fn markPassivated(self: *Workload, actor_index: usize) void {
-        self.active[actor_index] = false;
     }
 
     pub fn touchedCount(self: *const Workload) u64 {

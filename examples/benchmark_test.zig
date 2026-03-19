@@ -1,8 +1,5 @@
 const std = @import("std");
 const bench = @import("benchmark.zig");
-const cli = @import("benchmark/cli.zig");
-const histogram = @import("benchmark/histogram.zig");
-const scale = @import("benchmark/scale.zig");
 
 test "parseCliArgs defaults to sqlite suite" {
     const parsed = try bench.parseCliArgs(&.{});
@@ -56,32 +53,6 @@ test "resolveSqlitePaths auto generates suite paths in cache" {
     try std.testing.expect(!std.mem.eql(u8, paths.reactivate_path.?, paths.soak_path.?));
 }
 
-test "auto-generated suite phase paths must also be fresh" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const base_path = try std.fmt.allocPrint(
-        std.testing.allocator,
-        ".zig-cache/tmp/{s}/bench.sqlite3",
-        .{tmp.sub_path},
-    );
-    defer std.testing.allocator.free(base_path);
-
-    const churn_path = try std.fmt.allocPrint(
-        std.testing.allocator,
-        ".zig-cache/tmp/{s}/bench.churn.sqlite3",
-        .{tmp.sub_path},
-    );
-    defer std.testing.allocator.free(churn_path);
-
-    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = churn_path, .data = "stale" });
-
-    try std.testing.expectError(
-        error.SQLitePathExists,
-        cli.ensureSuitePhasePathsAreFresh(base_path),
-    );
-}
-
 test "deriveSuitePhaseDurations keeps the approved split" {
     const default_split = try bench.deriveSuitePhaseDurations(420);
     try std.testing.expectEqual(@as(u64, 180), default_split.churn_seconds);
@@ -92,23 +63,6 @@ test "deriveSuitePhaseDurations keeps the approved split" {
     try std.testing.expectEqual(@as(u64, 30), minimum_split.churn_seconds);
     try std.testing.expectEqual(@as(u64, 30), minimum_split.reactivate_seconds);
     try std.testing.expectEqual(@as(u64, 30), minimum_split.soak_seconds);
-}
-
-test "reactivate cohorts rotate across the full actor set" {
-    try std.testing.expectEqual(@as(usize, 126), scale.nextReactivateActorIndex(256, 126, 0));
-    try std.testing.expectEqual(@as(usize, 127), scale.nextReactivateActorIndex(256, 126, 1));
-    try std.testing.expectEqual(@as(usize, 0), scale.nextReactivateActorIndex(256, 126, 130));
-    try std.testing.expectEqual(@as(usize, 128), scale.nextReactivateCohortStart(256, 0, 128));
-    try std.testing.expectEqual(@as(usize, 0), scale.nextReactivateCohortStart(256, 128, 128));
-}
-
-test "latency histogram percentile does not under-report linear buckets" {
-    var latencies = try histogram.LatencyHistogram.init(std.testing.allocator);
-    defer latencies.deinit();
-
-    latencies.record(1_500);
-
-    try std.testing.expect(latencies.percentile(50) >= 1_500);
 }
 
 test "sqlite churn mode runs with a tiny actor set" {

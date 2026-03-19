@@ -166,7 +166,11 @@ pub fn resolveSqlitePaths(alloc: Allocator, config: CliConfig) !SqlitePaths {
             const soak_path = try derivePhasePath(alloc, base_path, "soak");
             errdefer alloc.free(soak_path);
 
-            try ensureSuitePhasePathsAreFresh(base_path);
+            if (config.sqlite_path != null) {
+                try ensureUserPathIsFresh(churn_path);
+                try ensureUserPathIsFresh(reactivate_path);
+                try ensureUserPathIsFresh(soak_path);
+            }
 
             return .{
                 .base_path = base_path,
@@ -237,20 +241,6 @@ fn parseU64(text: []const u8) !u64 {
 fn prepareUserPath(alloc: Allocator, path: []const u8) ![]const u8 {
     try ensureUserPathIsFresh(path);
     return try alloc.dupe(u8, path);
-}
-
-pub fn ensureSuitePhasePathsAreFresh(base_path: []const u8) !void {
-    const alloc = std.heap.page_allocator;
-    const churn_path = try derivePhasePath(alloc, base_path, "churn");
-    defer alloc.free(churn_path);
-    const reactivate_path = try derivePhasePath(alloc, base_path, "reactivate");
-    defer alloc.free(reactivate_path);
-    const soak_path = try derivePhasePath(alloc, base_path, "soak");
-    defer alloc.free(soak_path);
-
-    try ensureUserPathIsFresh(churn_path);
-    try ensureUserPathIsFresh(reactivate_path);
-    try ensureUserPathIsFresh(soak_path);
 }
 
 fn ensureUserPathIsFresh(path: []const u8) !void {

@@ -147,6 +147,37 @@ zig build -Doptimize=ReleaseFast bench                   # default SQLite suite
 zig build -Doptimize=ReleaseFast bench -- --mode micro --scenario memory_hot --ops 1000000
 ```
 
+Benchmark runner:
+
+```bash
+zig build -Doptimize=ReleaseFast bench
+```
+
+That default run now executes the SQLite scale suite in `--mode sqlite-suite`. If you omit `--sqlite-path`, the benchmark creates fresh database files under `.zig-cache/bench/`.
+
+Recommended invocations:
+
+```bash
+zig build -Doptimize=ReleaseFast bench -- --mode micro --scenario memory_hot --ops 1000000
+zig build -Doptimize=ReleaseFast bench -- --mode sqlite-suite --sqlite-path actors-bench.sqlite3
+zig build -Doptimize=ReleaseFast bench -- --mode sqlite-reactivate --actors 1000 --history-preload 256 --sqlite-path actors-bench.sqlite3
+```
+
+Modes:
+
+- `micro`: preserves the original single-actor benchmark for `memory_hot`, `memory_cold`, `sqlite_hot`, and `sqlite_cold` scenarios.
+- `sqlite-suite`: runs fresh `churn`, `reactivate`, and `soak` phases with the default `420` second `3:2:2` split.
+- `sqlite-churn`: mixed skewed actor traffic with periodic passivation.
+- `sqlite-reactivate`: repeated preload, passivate, and first-`get` cold activation rounds.
+- `sqlite-soak`: mixed workload plus 10-second stability samples.
+
+Key flags:
+
+- `--actors`, `--duration-seconds`, `--write-percent`, `--passivate-every`, `--snapshot-every`, `--history-preload`, and `--sqlite-path`.
+- `--mode micro` also takes `--scenario` and `--ops`.
+- Legacy positional micro invocations still work during the transition, for example `zig build -Doptimize=ReleaseFast bench -- memory_cold 250000`.
+- If you supply `--sqlite-path`, the benchmark refuses to reuse an existing database, WAL, or SHM file. In `sqlite-suite`, the supplied path becomes the base name for phase-local files such as `actors-bench.churn.sqlite3`.
+
 ## Notes
 
 - Call `shutdown()` before `deinit()` to snapshot and passivate active services cleanly. `deinit()` only releases memory.

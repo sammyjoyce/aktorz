@@ -65,7 +65,7 @@ pub const LatencyHistogram = struct {
 
     fn bucketUpperBoundNs(index: usize) u64 {
         if (index < linearLimitBucketCount()) {
-            return @as(u64, @intCast(index)) * std.time.ns_per_us;
+            return (@as(u64, @intCast(index)) + 1) * std.time.ns_per_us;
         }
 
         const log_bucket = index - linearLimitBucketCount() + 1;

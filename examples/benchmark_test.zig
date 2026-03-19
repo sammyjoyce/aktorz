@@ -1,5 +1,7 @@
 const std = @import("std");
 const bench = @import("benchmark.zig");
+const histogram = @import("benchmark/histogram.zig");
+const scale = @import("benchmark/scale.zig");
 
 test "parseCliArgs defaults to sqlite suite" {
     const parsed = try bench.parseCliArgs(&.{});
@@ -63,6 +65,23 @@ test "deriveSuitePhaseDurations keeps the approved split" {
     try std.testing.expectEqual(@as(u64, 30), minimum_split.churn_seconds);
     try std.testing.expectEqual(@as(u64, 30), minimum_split.reactivate_seconds);
     try std.testing.expectEqual(@as(u64, 30), minimum_split.soak_seconds);
+}
+
+test "reactivate cohorts rotate across the full actor set" {
+    try std.testing.expectEqual(@as(usize, 126), scale.nextReactivateActorIndex(256, 126, 0));
+    try std.testing.expectEqual(@as(usize, 127), scale.nextReactivateActorIndex(256, 126, 1));
+    try std.testing.expectEqual(@as(usize, 0), scale.nextReactivateActorIndex(256, 126, 130));
+    try std.testing.expectEqual(@as(usize, 128), scale.nextReactivateCohortStart(256, 0, 128));
+    try std.testing.expectEqual(@as(usize, 0), scale.nextReactivateCohortStart(256, 128, 128));
+}
+
+test "latency histogram percentile does not under-report linear buckets" {
+    var latencies = try histogram.LatencyHistogram.init(std.testing.allocator);
+    defer latencies.deinit();
+
+    latencies.record(1_500);
+
+    try std.testing.expect(latencies.percentile(50) >= 1_500);
 }
 
 test "sqlite churn mode runs with a tiny actor set" {

@@ -22,6 +22,16 @@ const wal_autocheckpoint_pages: u32 = 0;
 const reactivate_cohort_cap: u64 = 128;
 const soak_sample_interval_seconds: u64 = 10;
 
+pub fn nextReactivateActorIndex(actor_count: usize, cohort_start: usize, prepared_offset: usize) usize {
+    std.debug.assert(actor_count > 0);
+    return (cohort_start + prepared_offset) % actor_count;
+}
+
+pub fn nextReactivateCohortStart(actor_count: usize, cohort_start: usize, prepared_actor_count: usize) usize {
+    std.debug.assert(actor_count > 0);
+    return (cohort_start + prepared_actor_count) % actor_count;
+}
+
 const CounterService = struct {
     alloc: Allocator,
     value: u64,
@@ -312,6 +322,8 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
     defer workload.deinit();
 
     const cohort_size: usize = @intCast(@min(config.actors, reactivate_cohort_cap));
+    const prepared_actor_indexes = try alloc.alloc(usize, cohort_size);
+    defer alloc.free(prepared_actor_indexes);
     var latencies = try histogram.LatencyHistogram.init(alloc);
     defer latencies.deinit();
 
@@ -321,30 +333,41 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
     const start = monotonicNow(io);
     const deadline_ns = duration_seconds * std.time.ns_per_s;
     var measured_cohort_size: usize = 0;
+    var cohort_start: usize = 0;
 
     while (elapsedNanoseconds(start, monotonicNow(io)) < deadline_ns) {
         collector.reset();
 
         var prepared_actor_count: usize = 0;
-        while (prepared_actor_count < cohort_size) : (prepared_actor_count += 1) {
+        while (prepared_actor_count < cohort_size) {
             if (elapsedNanoseconds(start, monotonicNow(io)) >= deadline_ns) break;
 
-            const address = workload.addresses[prepared_actor_count];
+            const actor_index = nextReactivateActorIndex(workload.addresses.len, cohort_start, prepared_actor_count);
+            const address = workload.addresses[actor_index];
             var preload_index: u64 = 0;
             while (preload_index < config.history_preload) : (preload_index += 1) {
+                // Stop before counting a partially prepared actor in the measured batch.
+                if (elapsedNanoseconds(start, monotonicNow(io)) >= deadline_ns) break;
                 try runtime.tell(address, workload.message_ids.next(.preload), "inc");
-                workload.recordWrite(prepared_actor_count);
+                workload.recordWrite(actor_index);
             }
+
+            if (preload_index < config.history_preload) break;
+
             _ = try runtime.passivate(address);
-            workload.markPassivated(prepared_actor_count);
+            workload.markPassivated(actor_index);
+            prepared_actor_indexes[prepared_actor_count] = actor_index;
+            prepared_actor_count += 1;
         }
 
         if (prepared_actor_count == 0) break;
+        cohort_start = nextReactivateCohortStart(workload.addresses.len, cohort_start, prepared_actor_count);
         measured_cohort_size = @max(measured_cohort_size, prepared_actor_count);
 
         collector.reset();
-        var actor_index: usize = 0;
-        while (actor_index < prepared_actor_count) : (actor_index += 1) {
+        var prepared_index: usize = 0;
+        while (prepared_index < prepared_actor_count) : (prepared_index += 1) {
+            const actor_index = prepared_actor_indexes[prepared_index];
             const address = workload.addresses[actor_index];
             const op_start = monotonicNow(io);
             const reply = (try runtime.request(address, workload.message_ids.next(.measured), "get")) orelse return error.ExpectedReply;

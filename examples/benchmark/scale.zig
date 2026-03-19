@@ -255,6 +255,7 @@ fn runChurnPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: [
             if (passivate_after_write) {
                 const passivate_start = monotonicNow(io);
                 _ = try runtime.passivate(address);
+                workload.markPassivated(actor_index);
                 passivation_time_ns += elapsedNanoseconds(passivate_start, monotonicNow(io));
                 passivation_count += 1;
             }
@@ -270,7 +271,7 @@ fn runChurnPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: [
         latencies.record(elapsedNanoseconds(op_start, monotonicNow(io)));
     }
 
-    try verifyExpectedValues(&runtime, &workload, .churn);
+    try verifyExpectedValues(&runtime, &store, &workload);
 
     const elapsed_ns = elapsedNanoseconds(start, monotonicNow(io));
     const sqlite_metrics = try sampleSqliteMetrics(io, &store, sqlite_path);
@@ -335,6 +336,7 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
                 workload.recordWrite(prepared_actor_count);
             }
             _ = try runtime.passivate(address);
+            workload.markPassivated(prepared_actor_count);
         }
 
         if (prepared_actor_count == 0) break;
@@ -357,7 +359,7 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
         accumulateStoreCounters(&measured_store_counters, collector.snapshot());
     }
 
-    try verifyExpectedValues(&runtime, &workload, .reactivate);
+    try verifyExpectedValues(&runtime, &store, &workload);
 
     const sqlite_metrics = try sampleSqliteMetrics(io, &store, sqlite_path);
     return .{ .reactivate = .{
@@ -423,6 +425,7 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
             writes += 1;
             if (passivate_after_write) {
                 _ = try runtime.passivate(address);
+                workload.markPassivated(actor_index);
             }
         } else {
             const reply = (try runtime.request(address, workload.message_ids.next(.measured), "get")) orelse return error.ExpectedReply;
@@ -462,7 +465,7 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
         }
     }
 
-    try verifyExpectedValues(&runtime, &workload, .soak);
+    try verifyExpectedValues(&runtime, &store, &workload);
     const sqlite_metrics = try sampleSqliteMetrics(io, &store, sqlite_path);
     return .{ .soak = .{
         .total_elapsed_seconds = duration_seconds,
@@ -475,17 +478,33 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
     } };
 }
 
-fn verifyExpectedValues(runtime: *durable.Runtime, workload: *Workload, comptime phase_tag: MessageIds.PhaseTag) !void {
+fn verifyExpectedValues(runtime: *durable.Runtime, store: *durable_sqlite.SQLiteNodeStore, workload: *Workload) !void {
     var actor_index: usize = 0;
+    var object_id_buf: [128]u8 = undefined;
+
     while (actor_index < workload.addresses.len) : (actor_index += 1) {
         if (!workload.needs_verify[actor_index]) continue;
 
-        const reply = (try runtime.request(workload.addresses[actor_index], workload.message_ids.next(.verify), "get")) orelse return error.ExpectedReply;
-        defer reply.deinit();
-        const value = try std.fmt.parseUnsigned(u64, reply.bytes, 10);
+        const value = if (workload.active[actor_index]) blk: {
+            const reply = (try runtime.request(workload.addresses[actor_index], workload.message_ids.next(.verify), "get")) orelse return error.ExpectedReply;
+            defer reply.deinit();
+            break :blk try std.fmt.parseUnsigned(u64, reply.bytes, 10);
+        } else blk: {
+            const object_id = std.fmt.bufPrint(
+                &object_id_buf,
+                "{d}:{s}:{s}",
+                .{
+                    workload.addresses[actor_index].kind.len,
+                    workload.addresses[actor_index].kind,
+                    workload.addresses[actor_index].key,
+                },
+            ) catch return error.ObjectIdBufferTooSmall;
+
+            break :blk try store.benchmarkCounterValueByObjectId(object_id);
+        };
+
         if (value != workload.expected[actor_index]) return error.UnexpectedFinalValue;
     }
-    _ = phase_tag;
 }
 
 fn sampleSqliteMetrics(io: Io, store: *durable_sqlite.SQLiteNodeStore, sqlite_path: []const u8) !report.SqliteMetrics {
@@ -552,6 +571,7 @@ const Workload = struct {
     expected: []u64,
     touched: []bool,
     needs_verify: []bool,
+    active: []bool,
     prng: std.Random.DefaultPrng,
     write_percent: u8,
     hot_count: usize,
@@ -579,12 +599,17 @@ const Workload = struct {
         errdefer alloc.free(needs_verify);
         @memset(needs_verify, false);
 
+        const active = try alloc.alloc(bool, count);
+        errdefer alloc.free(active);
+        @memset(active, false);
+
         return .{
             .alloc = alloc,
             .addresses = addresses,
             .expected = expected,
             .touched = touched,
             .needs_verify = needs_verify,
+            .active = active,
             .prng = std.Random.DefaultPrng.init(seed),
             .write_percent = write_percent,
             .hot_count = hotSetCount(count),
@@ -598,6 +623,7 @@ const Workload = struct {
         self.alloc.free(self.expected);
         self.alloc.free(self.touched);
         self.alloc.free(self.needs_verify);
+        self.alloc.free(self.active);
         self.* = undefined;
     }
 
@@ -620,10 +646,16 @@ const Workload = struct {
         self.expected[actor_index] += 1;
         self.touched[actor_index] = true;
         self.needs_verify[actor_index] = true;
+        self.active[actor_index] = true;
     }
 
     pub fn recordReadVerified(self: *Workload, actor_index: usize) void {
         self.needs_verify[actor_index] = false;
+        self.active[actor_index] = true;
+    }
+
+    pub fn markPassivated(self: *Workload, actor_index: usize) void {
+        self.active[actor_index] = false;
     }
 
     pub fn touchedCount(self: *const Workload) u64 {

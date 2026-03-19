@@ -39,6 +39,11 @@ const sql_load_snapshot =
     "FROM actor_snapshot " ++
     "WHERE object_id = ?1";
 
+const sql_load_snapshot_bytes =
+    "SELECT snapshot " ++
+    "FROM actor_snapshot " ++
+    "WHERE object_id = ?1";
+
 const sql_replay_after =
     "SELECT seq, mutation " ++
     "FROM actor_wal " ++
@@ -76,6 +81,11 @@ const sql_count_actor_snapshot =
 const sql_count_actor_wal =
     "SELECT COUNT(*) " ++
     "FROM actor_wal";
+
+const sql_count_actor_wal_for_object =
+    "SELECT COUNT(*) " ++
+    "FROM actor_wal " ++
+    "WHERE object_id = ?1";
 
 const sql_count_actor_seen_message =
     "SELECT COUNT(*) " ++
@@ -169,6 +179,41 @@ pub const SQLiteNodeStore = struct {
     pub fn walAutocheckpointPages(self: *SQLiteNodeStore) !u32 {
         const value = try querySingleU64(self.db, sql_pragma_wal_autocheckpoint);
         return @intCast(value);
+    }
+
+    /// Benchmark helper for the counter-service workload in examples/benchmark/scale.zig.
+    /// Computes durable state as parsed snapshot value plus unsnapshotted WAL rows.
+    pub fn benchmarkCounterValueByObjectId(self: *SQLiteNodeStore, object_id: []const u8) !u64 {
+        var snapshot_value: u64 = 0;
+        {
+            var stmt = try Statement.init(self.db, sql_load_snapshot_bytes);
+            defer stmt.deinit();
+
+            try bindText(stmt.ptr, 1, object_id);
+
+            switch (try stmt.step()) {
+                .done => {},
+                .row => {
+                    const bytes = try columnBlobSlice(stmt.ptr, 0, true);
+                    snapshot_value = if (bytes.len == 0) 0 else try std.fmt.parseUnsigned(u64, bytes, 10);
+                },
+            }
+        }
+
+        var wal_count: u64 = 0;
+        {
+            var stmt = try Statement.init(self.db, sql_count_actor_wal_for_object);
+            defer stmt.deinit();
+
+            try bindText(stmt.ptr, 1, object_id);
+
+            wal_count = switch (try stmt.step()) {
+                .row => try columnU64(stmt.ptr, 0),
+                .done => 0,
+            };
+        }
+
+        return snapshot_value + wal_count;
     }
 
     pub fn asStoreProvider(self: *SQLiteNodeStore) core.StoreProvider {

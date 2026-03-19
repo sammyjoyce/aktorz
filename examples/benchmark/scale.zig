@@ -263,6 +263,7 @@ fn runChurnPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: [
             defer reply.deinit();
             const value = try std.fmt.parseUnsigned(u64, reply.bytes, 10);
             if (value != workload.expected[actor_index]) return error.UnexpectedReadValue;
+            workload.recordReadVerified(actor_index);
             reads += 1;
         }
 
@@ -348,6 +349,7 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
             defer reply.deinit();
             const value = try std.fmt.parseUnsigned(u64, reply.bytes, 10);
             if (value != workload.expected[actor_index]) return error.UnexpectedReadValue;
+            workload.recordReadVerified(actor_index);
             latencies.record(elapsedNanoseconds(op_start, monotonicNow(io)));
             cold_activation_count += 1;
         }
@@ -427,6 +429,7 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
             defer reply.deinit();
             const value = try std.fmt.parseUnsigned(u64, reply.bytes, 10);
             if (value != workload.expected[actor_index]) return error.UnexpectedReadValue;
+            workload.recordReadVerified(actor_index);
             reads += 1;
         }
 
@@ -475,7 +478,7 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
 fn verifyExpectedValues(runtime: *durable.Runtime, workload: *Workload, comptime phase_tag: MessageIds.PhaseTag) !void {
     var actor_index: usize = 0;
     while (actor_index < workload.addresses.len) : (actor_index += 1) {
-        if (!workload.touched[actor_index]) continue;
+        if (!workload.needs_verify[actor_index]) continue;
 
         const reply = (try runtime.request(workload.addresses[actor_index], workload.message_ids.next(.verify), "get")) orelse return error.ExpectedReply;
         defer reply.deinit();
@@ -548,6 +551,7 @@ const Workload = struct {
     addresses: []durable.Address,
     expected: []u64,
     touched: []bool,
+    needs_verify: []bool,
     prng: std.Random.DefaultPrng,
     write_percent: u8,
     hot_count: usize,
@@ -571,11 +575,16 @@ const Workload = struct {
         errdefer alloc.free(touched);
         @memset(touched, false);
 
+        const needs_verify = try alloc.alloc(bool, count);
+        errdefer alloc.free(needs_verify);
+        @memset(needs_verify, false);
+
         return .{
             .alloc = alloc,
             .addresses = addresses,
             .expected = expected,
             .touched = touched,
+            .needs_verify = needs_verify,
             .prng = std.Random.DefaultPrng.init(seed),
             .write_percent = write_percent,
             .hot_count = hotSetCount(count),
@@ -588,6 +597,7 @@ const Workload = struct {
         self.alloc.free(self.addresses);
         self.alloc.free(self.expected);
         self.alloc.free(self.touched);
+        self.alloc.free(self.needs_verify);
         self.* = undefined;
     }
 
@@ -609,6 +619,11 @@ const Workload = struct {
     pub fn recordWrite(self: *Workload, actor_index: usize) void {
         self.expected[actor_index] += 1;
         self.touched[actor_index] = true;
+        self.needs_verify[actor_index] = true;
+    }
+
+    pub fn recordReadVerified(self: *Workload, actor_index: usize) void {
+        self.needs_verify[actor_index] = false;
     }
 
     pub fn touchedCount(self: *const Workload) u64 {

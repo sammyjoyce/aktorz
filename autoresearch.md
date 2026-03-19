@@ -45,3 +45,10 @@ Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig b
   - Key phase stats: churn `92652 ops`, reactivate `563 cold activations`, soak `74408 ops`
   - Checks: `./autoresearch.checks.sh` passed
   - Keep decision: **keep**
+- Experiment 2 (discarded, uncommitted):
+  - Change attempted: add per-write deadline checks inside reactivate preload loop to reduce end-of-phase overrun further.
+  - Result: success
+  - Primary metric: `524.458s` (**31.313s slower** than kept run)
+  - Key phase stats: churn `102654 ops`, reactivate `826 cold activations`, soak `74447 ops`
+  - Checks: benchmark run passed
+  - Keep decision: **discard** (restored `examples/benchmark/scale.zig` to `HEAD`)

@@ -1,167 +1,115 @@
 # aktorz
 
-`aktorz` is a small Zig package for building lazily activated, single-threaded, stateful services with private durable storage.
+A small Zig package for building lazily activated, single-threaded, stateful services with private durable storage. No external dependencies beyond the Zig standard library (SQLite optional).
 
-It keeps the transport and storage details pluggable:
+## How it works
 
-- `Runtime` manages activations, mailboxes, replay, snapshotting, and passivation.
-- `Service` is the user-defined state machine.
-- `StoreProvider` / `ScopedStore` define the durability boundary.
-- `Resolver` / `Forwarder` are optional hooks for global routing.
-- `MemoryNodeStore` is included for tests and local demos.
-- `TinyGateway` and `TcpGateway` provide a minimal framed TCP gateway.
-- `CartService` is included as a concrete example service.
-- `BankAccountService` is a richer example with state-machine transitions, overdraft logic, and bounded transaction history.
-- `SQLiteNodeStore` lives in the separate `durable_actor_sqlite` module.
+A `Service` is a user-defined state machine. The `Runtime` activates it on demand, replays its durable log, and then feeds it messages one at a time:
 
-## What the runtime guarantees
+1. `decide()` inspects the current state and message, returning a `Decision` (an optional mutation + optional reply).
+2. The mutation is persisted via `appendOnce()` — deduplicated by message ID.
+3. Only after the append succeeds does the runtime call `apply()` to update in-memory state.
+4. Snapshots are taken periodically and on passivation, compacting the log.
 
-For a given local service instance, messages are processed one at a time.
+This keeps service logic serialized and retry-safe without locks.
 
-A mutable command is handled in this order:
+## Quick start
 
-1. `decide()` computes a durable mutation from current state + message.
-2. The mutation is appended with `appendOnce(message_id, seq, ...)`.
-3. Only after the append succeeds does the runtime call `apply()`.
-4. Snapshots are produced periodically or on passivation.
-
-That means service logic stays serialized and retry-safe without lock confetti.
-
-## Requirements
-
-Zig 0.16.0-dev.2905 or later. A nix flake is included for convenience:
+Requires **Zig 0.16.0-dev.2905** or later. A Nix flake is included:
 
 ```bash
-nix develop
+nix develop          # enter the dev shell
+zig build test       # run core + example tests
+zig build sqlite-test  # run SQLite-backed tests (needs system sqlite3)
 ```
 
-## Add it to another Zig project
+Try the cart gateway:
 
-`build.zig.zon`:
+```bash
+zig build cart-gateway                # starts on port 7070
+printf 'kind: cart\nkey: acme:c-42\nmessage-id: 1\ncontent-length: 20\n\nadd|red-socks|2|1299' | nc localhost 7070
+```
+
+## Add to your project
+
+In your `build.zig.zon`, add the dependency:
 
 ```zig
-.{
-    .name = .my_app,
-    .fingerprint = 0x<your_fingerprint>,
-    .version = "0.1.0",
-    .dependencies = .{
-        .aktorz = .{
-            .path = "../aktorz",
-        },
-    },
-    .paths = .{ "" },
-}
+.dependencies = .{
+    .aktorz = .{ .path = "../aktorz" },
+},
 ```
 
-### Pure Zig runtime only
-
-`build.zig`:
+Then in `build.zig`, import the module:
 
 ```zig
-const std = @import("std");
-
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-
-    const durable_dep = b.dependency("aktorz", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const exe = b.addExecutable(.{
-        .name = "my_app",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-
-    exe.root_module.addImport("durable_actor", durable_dep.module("durable_actor"));
-    b.installArtifact(exe);
-}
+const durable_dep = b.dependency("aktorz", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("durable_actor", durable_dep.module("durable_actor"));
 ```
 
-### With SQLite persistence
-
-`build.zig`:
+For SQLite persistence, also add:
 
 ```zig
-const std = @import("std");
-
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-
-    const durable_dep = b.dependency("aktorz", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const exe = b.addExecutable(.{
-        .name = "my_app",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-
-    exe.root_module.addImport("durable_actor", durable_dep.module("durable_actor"));
-    exe.root_module.addImport("durable_actor_sqlite", durable_dep.module("durable_actor_sqlite"));
-    exe.root_module.link_libc = true;
-    exe.root_module.linkSystemLibrary("sqlite3", .{});
-
-    b.installArtifact(exe);
-}
+exe.root_module.addImport("durable_actor_sqlite", durable_dep.module("durable_actor_sqlite"));
+exe.root_module.link_libc = true;
+exe.root_module.linkSystemLibrary("sqlite3", .{});
 ```
 
-`src/main.zig`:
+## Define a service
+
+Implement five methods and the runtime handles the rest:
 
 ```zig
 const durable = @import("durable_actor");
-const durable_sqlite = @import("durable_actor_sqlite");
-const std = @import("std");
 
-pub fn main() !void {
-    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa_state.deinit();
-    const gpa = gpa_state.allocator();
+pub const MyService = struct {
+    // ... your state fields ...
 
-    var store = try durable_sqlite.SQLiteNodeStore.init(gpa, "actors.sqlite3", .{});
-    defer store.deinit();
-
-    var runtime = durable.Runtime.init(gpa, store.asStoreProvider(), .{
-        .snapshot_every = 64,
-    });
-    defer runtime.deinit();
-    defer runtime.shutdown() catch unreachable;
-
-    // Define your own service or copy one from the examples/ directory.
-    // See examples/cart_example.zig and examples/bank_example.zig.
-    const MyService = @import("my_service.zig").MyService;
-
-    try runtime.registerFactory("my_kind", durable.Factory.from(MyService, MyService.create));
-
-    const addr = durable.Address{
-        .kind = "my_kind",
-        .key = "tenant:entity-42",
-    };
-
-    const reply = (try runtime.request(addr, 1, "some-command|arg")).?;
-    defer reply.deinit();
-
-    std.debug.print("{s}", .{reply.bytes});
-}
+    pub fn create(alloc: Allocator, address: durable.Address) !*MyService { ... }
+    pub fn destroy(self: *MyService, alloc: Allocator) void { ... }
+    pub fn loadSnapshot(self: *MyService, bytes: []const u8) !void { ... }
+    pub fn makeSnapshot(self: *MyService, alloc: Allocator) !durable.OwnedBytes { ... }
+    pub fn decide(self: *MyService, alloc: Allocator, message: []const u8) !durable.Decision { ... }
+    pub fn apply(self: *MyService, mutation: []const u8) !void { ... }
+};
 ```
 
-## Tiny framed gateway
+Register it with the runtime:
 
-The package includes a tiny framed gateway that is generic across service kinds.
+```zig
+var store = durable.MemoryNodeStore.init(alloc);
+var runtime = durable.Runtime.init(alloc, store.asStoreProvider(), .{ .snapshot_every = 64 });
+defer runtime.deinit();
+defer runtime.shutdown() catch unreachable;
 
-Request frame:
+try runtime.registerFactory("my_kind", durable.Factory.from(MyService, MyService.create));
 
+const reply = (try runtime.request(
+    .{ .kind = "my_kind", .key = "tenant:entity-42" }, 1, "some-command|arg",
+)).?;
+defer reply.deinit();
+```
+
+See `examples/cart_example.zig` and `examples/bank_example.zig` for complete working services.
+
+## Key types
+
+| Type | Role |
+|---|---|
+| `Runtime` | Manages activations, mailboxes, replay, snapshotting, passivation |
+| `Service` | Vtable interface for user state machines |
+| `Factory` | Creates `Service` instances from an `Address` |
+| `StoreProvider` / `ScopedStore` | Pluggable durability boundary (log + snapshots) |
+| `Resolver` / `Forwarder` | Optional hooks for routing across nodes |
+| `MemoryNodeStore` | In-memory store for tests and demos |
+| `SQLiteNodeStore` | SQLite-backed store (separate `durable_actor_sqlite` module) |
+| `TinyGateway` / `TcpGateway` | Minimal framed TCP gateway |
+
+## TCP gateway protocol
+
+One connection carries one request.
+
+**Request:**
 ```text
 kind: <service-kind>
 key: <service-key>
@@ -171,8 +119,7 @@ content-length: <decimal-usize>
 <payload-bytes>
 ```
 
-Response frame:
-
+**Response:**
 ```text
 status: ok|noreply|error
 content-length: <decimal-usize>
@@ -180,87 +127,32 @@ content-length: <decimal-usize>
 <reply-or-error-body>
 ```
 
-One connection carries one request. That keeps the gateway small enough to embed in tests, TCP listeners, and local tools without summoning a cathedral of networking abstractions.
+## Examples
 
-## Included examples
+| Command | Description |
+|---|---|
+| `zig build cart-gateway` | In-memory cart service on port 7070 |
+| `zig build cart-sqlite-gateway -- actors.sqlite3` | SQLite-backed cart service |
+| `zig build bank-gateway` | Bank account with freeze/close lifecycle |
+| `zig build -Doptimize=ReleaseFast bench` | Benchmark runner (default: SQLite suite) |
 
-In-memory cart gateway (listens on port 7070):
-
-```bash
-zig build cart-gateway
-```
-
-SQLite-backed cart gateway (listens on port 7070):
-
-```bash
-zig build cart-sqlite-gateway -- actors.sqlite3
-```
-
-Pass the DB path as the first argument. Defaults to `actors.sqlite3`.
-
-Test with `nc`:
-
-```bash
-printf 'kind: cart\nkey: acme:customer-42\nmessage-id: 1\ncontent-length: 20\n\nadd|red-socks|2|1299' | nc localhost 7070
-```
-
-### Bank account gateway
-
-A richer example that exercises state-machine transitions (active/frozen/closed),
-overdraft protection, bounded recent-transaction history, and snapshot round-trips.
-
-```bash
-zig build bank-gateway
-```
-
-Commands: `deposit|<cents>|<memo>`, `withdraw|<cents>|<memo>`,
-`set_overdraft|<cents>`, `freeze|<reason>`, `unfreeze`, `close`,
-`balance`, `statement`.
-
-```bash
-printf 'kind: bank\nkey: acme:checking\nmessage-id: 1\ncontent-length: 25\n\ndeposit|50000|big savings' | nc localhost 7070
-```
-
-## SQLite module
-
-SQLite support lives in a separate module so projects that only want the pure-Zig runtime do not need SQLite headers or linker flags.
-
-Module name:
-
-```zig
-@import("durable_actor_sqlite")
-```
-
-Main type:
-
-```zig
-const durable_sqlite = @import("durable_actor_sqlite");
-var store = try durable_sqlite.SQLiteNodeStore.init(gpa, "actors.sqlite3", .{});
-```
-
-The schema is created on first open.
-
-Included docs:
-
-- `docs/sqlite_schema.sql`
-- `docs/sqlite_store.md`
+Bank account commands: `deposit|<cents>|<memo>`, `withdraw|<cents>|<memo>`, `set_overdraft|<cents>`, `freeze|<reason>`, `unfreeze`, `close`, `balance`, `statement`.
 
 ## Build steps
 
-Pure Zig tests:
-
 ```bash
-zig build test
-```
-
-SQLite-backed tests:
-
-```bash
-zig build sqlite-test
+zig build test           # core + example tests
+zig build sqlite-test    # SQLite + benchmark tests
+zig build -Doptimize=ReleaseFast bench                   # default SQLite suite
+zig build -Doptimize=ReleaseFast bench -- --mode micro --scenario memory_hot --ops 1000000
 ```
 
 ## Notes
 
-`deinit()` only releases in-memory resources. Call `shutdown()` first when you want active services snapshotted and passivated cleanly.
+- Call `shutdown()` before `deinit()` to snapshot and passivate active services cleanly. `deinit()` only releases memory.
+- `actor_seen_message` is retained so old retries are still recognized as duplicates. Idempotency history grows unless you choose a retention policy.
 
-`actor_seen_message` is intentionally retained so old retries are still recognized as duplicates. Idempotency history grows over time unless you pick a retention policy.
+## Further reading
+
+- [`docs/sqlite_store.md`](docs/sqlite_store.md) — SQLite store design
+- [`docs/sqlite_schema.sql`](docs/sqlite_schema.sql) — SQLite schema

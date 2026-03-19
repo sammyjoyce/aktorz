@@ -68,6 +68,18 @@ pub fn build(b: *std.Build) void {
     const sqlite_test_step = b.step("sqlite-test", "Run SQLite-backed durable_actor tests");
     sqlite_test_step.dependOn(&run_sqlite_tests.step);
 
+    const benchmark_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/benchmark_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    benchmark_tests.root_module.addImport("durable_actor", durable_module);
+    benchmark_tests.root_module.addImport("durable_actor_sqlite", sqlite_module);
+    linkSqlite(benchmark_tests.root_module);
+    sqlite_test_step.dependOn(&b.addRunArtifact(benchmark_tests).step);
+
     const gateway_example = b.addExecutable(.{
         .name = "cart_tcp_gateway",
         .root_module = b.createModule(.{
@@ -107,6 +119,27 @@ pub fn build(b: *std.Build) void {
 
     const sqlite_gateway_step = b.step("cart-sqlite-gateway", "Run the cart TCP gateway backed by SQLite");
     sqlite_gateway_step.dependOn(&run_sqlite_gateway.step);
+
+    const benchmark_example = b.addExecutable(.{
+        .name = "aktorz_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/benchmark.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    benchmark_example.root_module.addImport("durable_actor", durable_module);
+    benchmark_example.root_module.addImport("durable_actor_sqlite", sqlite_module);
+    linkSqlite(benchmark_example.root_module);
+    b.installArtifact(benchmark_example);
+
+    const run_benchmark = b.addRunArtifact(benchmark_example);
+    if (b.args) |args| {
+        run_benchmark.addArgs(args);
+    }
+
+    const benchmark_step = b.step("bench", "Run the aktorz benchmark scenarios");
+    benchmark_step.dependOn(&run_benchmark.step);
 
     const bank_gateway_example = b.addExecutable(.{
         .name = "bank_tcp_gateway",

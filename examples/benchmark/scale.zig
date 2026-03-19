@@ -555,7 +555,13 @@ const Workload = struct {
     pub fn init(alloc: Allocator, actor_count: u64, seed: u64, write_percent: u8) !Workload {
         const count: usize = @intCast(actor_count);
         const addresses = try alloc.alloc(durable.Address, count);
-        errdefer alloc.free(addresses);
+        errdefer {
+            for (addresses) |address| {
+                if (address.key.len > 0) alloc.free(address.key);
+            }
+            alloc.free(addresses);
+        }
+        @memset(addresses, .{ .kind = "counter", .key = "" });
 
         for (addresses, 0..) |*address, index| {
             const key = try std.fmt.allocPrint(alloc, "bench:actor-{d}", .{index});

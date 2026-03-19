@@ -318,22 +318,30 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
 
     const start = monotonicNow(io);
     const deadline_ns = duration_seconds * std.time.ns_per_s;
+    var measured_cohort_size: usize = 0;
+
     while (elapsedNanoseconds(start, monotonicNow(io)) < deadline_ns) {
         collector.reset();
-        var actor_index: usize = 0;
-        while (actor_index < cohort_size) : (actor_index += 1) {
-            const address = workload.addresses[actor_index];
+
+        var prepared_actor_count: usize = 0;
+        while (prepared_actor_count < cohort_size) : (prepared_actor_count += 1) {
+            if (elapsedNanoseconds(start, monotonicNow(io)) >= deadline_ns) break;
+
+            const address = workload.addresses[prepared_actor_count];
             var preload_index: u64 = 0;
             while (preload_index < config.history_preload) : (preload_index += 1) {
                 try runtime.tell(address, workload.message_ids.next(.preload), "inc");
-                workload.recordWrite(actor_index);
+                workload.recordWrite(prepared_actor_count);
             }
             _ = try runtime.passivate(address);
         }
 
+        if (prepared_actor_count == 0) break;
+        measured_cohort_size = @max(measured_cohort_size, prepared_actor_count);
+
         collector.reset();
-        actor_index = 0;
-        while (actor_index < cohort_size) : (actor_index += 1) {
+        var actor_index: usize = 0;
+        while (actor_index < prepared_actor_count) : (actor_index += 1) {
             const address = workload.addresses[actor_index];
             const op_start = monotonicNow(io);
             const reply = (try runtime.request(address, workload.message_ids.next(.measured), "get")) orelse return error.ExpectedReply;
@@ -347,13 +355,12 @@ fn runReactivatePhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_pa
         accumulateStoreCounters(&measured_store_counters, collector.snapshot());
     }
 
-    markCohortTouched(&workload, cohort_size);
     try verifyExpectedValues(&runtime, &workload, .reactivate);
 
     const sqlite_metrics = try sampleSqliteMetrics(io, &store, sqlite_path);
     return .{ .reactivate = .{
         .cold_activation_count = cold_activation_count,
-        .measured_cohort_size = cohort_size,
+        .measured_cohort_size = measured_cohort_size,
         .total_actor_count = config.actors,
         .p50_latency_ns = latencies.percentile(50),
         .p95_latency_ns = latencies.percentile(95),
@@ -478,12 +485,6 @@ fn verifyExpectedValues(runtime: *durable.Runtime, workload: *Workload, comptime
     _ = phase_tag;
 }
 
-fn markCohortTouched(workload: *Workload, cohort_size: usize) void {
-    for (workload.touched[0..cohort_size]) |*touched| {
-        touched.* = true;
-    }
-}
-
 fn sampleSqliteMetrics(io: Io, store: *durable_sqlite.SQLiteNodeStore, sqlite_path: []const u8) !report.SqliteMetrics {
     const db_bytes = try fileSize(io, sqlite_path, false);
     const wal_path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}-wal", .{sqlite_path});
@@ -530,7 +531,7 @@ fn accumulateStoreCounters(target: *instrumentation.StoreCounters, delta: instru
 }
 
 fn freeResolvedPaths(alloc: Allocator, paths: cli.SqlitePaths) void {
-    inline for (. { paths.base_path, paths.shared_path, paths.churn_path, paths.reactivate_path, paths.soak_path }) |maybe_path| {
+    inline for (.{ paths.base_path, paths.shared_path, paths.churn_path, paths.reactivate_path, paths.soak_path }) |maybe_path| {
         if (maybe_path) |path| alloc.free(path);
     }
 }

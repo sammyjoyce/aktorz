@@ -184,36 +184,13 @@ pub const SQLiteNodeStore = struct {
     /// Benchmark helper for the counter-service workload in examples/benchmark/scale.zig.
     /// Computes durable state as parsed snapshot value plus unsnapshotted WAL rows.
     pub fn benchmarkCounterValueByObjectId(self: *SQLiteNodeStore, object_id: []const u8) !u64 {
-        var snapshot_value: u64 = 0;
-        {
-            var stmt = try Statement.init(self.db, sql_load_snapshot_bytes);
-            defer stmt.deinit();
+        var lookup = try self.initBenchmarkCounterLookup();
+        defer lookup.deinit();
+        return try lookup.valueForObjectId(object_id);
+    }
 
-            try bindText(stmt.ptr, 1, object_id);
-
-            switch (try stmt.step()) {
-                .done => {},
-                .row => {
-                    const bytes = try columnBlobSlice(stmt.ptr, 0, true);
-                    snapshot_value = if (bytes.len == 0) 0 else try std.fmt.parseUnsigned(u64, bytes, 10);
-                },
-            }
-        }
-
-        var wal_count: u64 = 0;
-        {
-            var stmt = try Statement.init(self.db, sql_count_actor_wal_for_object);
-            defer stmt.deinit();
-
-            try bindText(stmt.ptr, 1, object_id);
-
-            wal_count = switch (try stmt.step()) {
-                .row => try columnU64(stmt.ptr, 0),
-                .done => 0,
-            };
-        }
-
-        return snapshot_value + wal_count;
+    pub fn initBenchmarkCounterLookup(self: *SQLiteNodeStore) !BenchmarkCounterLookup {
+        return try BenchmarkCounterLookup.init(self.db);
     }
 
     pub fn asStoreProvider(self: *SQLiteNodeStore) core.StoreProvider {
@@ -401,6 +378,14 @@ const Statement = struct {
         _ = c.sqlite3_finalize(self.ptr);
     }
 
+    fn reset(self: *Statement) !void {
+        const reset_rc = c.sqlite3_reset(self.ptr);
+        if (reset_rc != c.SQLITE_OK) return sqliteError(reset_rc);
+
+        const clear_rc = c.sqlite3_clear_bindings(self.ptr);
+        if (clear_rc != c.SQLITE_OK) return sqliteError(clear_rc);
+    }
+
     fn step(self: *Statement) !enum { row, done } {
         const rc = c.sqlite3_step(self.ptr);
         return switch (rc) {
@@ -408,6 +393,51 @@ const Statement = struct {
             c.SQLITE_DONE => .done,
             else => return sqliteError(rc),
         };
+    }
+};
+
+pub const BenchmarkCounterLookup = struct {
+    snapshot_stmt: Statement,
+    wal_count_stmt: Statement,
+
+    fn init(db: *c.sqlite3) !BenchmarkCounterLookup {
+        var snapshot_stmt = try Statement.init(db, sql_load_snapshot_bytes);
+        errdefer snapshot_stmt.deinit();
+
+        return .{
+            .snapshot_stmt = snapshot_stmt,
+            .wal_count_stmt = try Statement.init(db, sql_count_actor_wal_for_object),
+        };
+    }
+
+    pub fn deinit(self: *BenchmarkCounterLookup) void {
+        self.snapshot_stmt.deinit();
+        self.wal_count_stmt.deinit();
+        self.* = undefined;
+    }
+
+    pub fn valueForObjectId(self: *BenchmarkCounterLookup, object_id: []const u8) !u64 {
+        try self.snapshot_stmt.reset();
+        try bindText(self.snapshot_stmt.ptr, 1, object_id);
+
+        var snapshot_value: u64 = 0;
+        switch (try self.snapshot_stmt.step()) {
+            .done => {},
+            .row => {
+                const bytes = try columnBlobSlice(self.snapshot_stmt.ptr, 0, true);
+                snapshot_value = if (bytes.len == 0) 0 else try std.fmt.parseUnsigned(u64, bytes, 10);
+            },
+        }
+
+        try self.wal_count_stmt.reset();
+        try bindText(self.wal_count_stmt.ptr, 1, object_id);
+
+        const wal_count = switch (try self.wal_count_stmt.step()) {
+            .row => try columnU64(self.wal_count_stmt.ptr, 0),
+            .done => 0,
+        };
+
+        return snapshot_value + wal_count;
     }
 };
 

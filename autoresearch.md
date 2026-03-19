@@ -66,11 +66,19 @@ Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig b
   - Run B result: success, primary metric `483.165s` (**2.587s faster** than experiment 3 best)
   - Checks: not run
   - Keep decision: **discard** due to mixed results and broader semantics shift than justified by the observed gain
-- Experiment 5 (pending commit):
+- Experiment 5 (`5ba00d7`):
   - Change: track actor active/passivated status; verify dirty active actors with the normal runtime `get` path, but verify dirty passivated actors from durable SQLite state using `benchmarkCounterValueByObjectId`.
   - Rationale: keep normal read-back for hot actors while avoiding cold-activation overhead for passivated actors during final verification.
   - Run A result: success, primary metric `534.637s` (first run after code changes; likely compile/noise inflated)
   - Run B result: success, primary metric `475.257s` (**10.495s faster** than experiment 3 best)
   - Run C result: success, primary metric `485.063s` (**0.689s faster** than experiment 3 best)
+  - Checks: `./autoresearch.checks.sh` passed
+  - Keep decision: **keep**
+- Experiment 6 (pending commit):
+  - Change: reuse prepared SQLite statements for passivated-actor verification instead of preparing/finalizing lookup statements for every actor.
+  - Rationale: keep experiment 5 semantics while cutting per-actor verification overhead inside the post-phase durable-state lookup path.
+  - Run A result: success, primary metric `489.087s`
+  - Run B result: success, primary metric `470.501s` (**4.756s faster** than experiment 5 best)
+  - Run C result: success, primary metric `469.816s` (**5.441s faster** than experiment 5 best)
   - Checks: `./autoresearch.checks.sh` passed
   - Keep decision: **keep**

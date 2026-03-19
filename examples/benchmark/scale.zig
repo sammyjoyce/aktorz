@@ -481,6 +481,8 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
 fn verifyExpectedValues(runtime: *durable.Runtime, store: *durable_sqlite.SQLiteNodeStore, workload: *Workload) !void {
     var actor_index: usize = 0;
     var object_id_buf: [128]u8 = undefined;
+    var lookup = try store.initBenchmarkCounterLookup();
+    defer lookup.deinit();
 
     while (actor_index < workload.addresses.len) : (actor_index += 1) {
         if (!workload.needs_verify[actor_index]) continue;
@@ -500,7 +502,7 @@ fn verifyExpectedValues(runtime: *durable.Runtime, store: *durable_sqlite.SQLite
                 },
             ) catch return error.ObjectIdBufferTooSmall;
 
-            break :blk try store.benchmarkCounterValueByObjectId(object_id);
+            break :blk try lookup.valueForObjectId(object_id);
         };
 
         if (value != workload.expected[actor_index]) return error.UnexpectedFinalValue;

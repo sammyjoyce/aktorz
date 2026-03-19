@@ -52,7 +52,7 @@ Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig b
   - Key phase stats: churn `102654 ops`, reactivate `826 cold activations`, soak `74447 ops`
   - Checks: benchmark run passed
   - Keep decision: **discard** (restored `examples/benchmark/scale.zig` to `HEAD`)
-- Experiment 3 (pending commit):
+- Experiment 3 (`2a4ce5a`):
   - Change: track actor-level verification freshness (`needs_verify`) and skip final read-back for actors whose last observed operation was a verified read.
   - Rationale: preserve correctness while reducing post-phase verification overhead.
   - Run A result: success, primary metric `485.752s` (**7.393s faster** than kept run)

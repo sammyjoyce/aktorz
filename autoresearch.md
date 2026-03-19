@@ -97,3 +97,10 @@ Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig b
   - Run B result: success, primary metric `468.682s` (**2.503s slower** than experiment 7 best)
   - Checks: not rerun
   - Keep decision: **discard** (restore `src/sqlite_store.zig` to the experiment 7 baseline before the next run)
+- Experiment 9 (discarded, uncommitted):
+  - Change attempted: use the durable SQLite verification path for all dirty actors, including currently active actors, instead of keeping active actors on the runtime `get` path.
+  - Rationale: test whether the improved object-id cache plus prepared lookup could outperform the mixed runtime/store verification strategy.
+  - Run A result: success, primary metric `479.376s`
+  - Run B result: success, primary metric `498.240s`
+  - Checks: not rerun
+  - Keep decision: **discard** (restore `examples/benchmark/scale.zig` to the experiment 7 baseline before the next run)

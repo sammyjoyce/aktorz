@@ -38,7 +38,7 @@ Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig b
   - Primary metric: `804.491s`
   - Key phase stats: churn `6274 ops`, reactivate `128 cold activations`, soak `5090 ops`
   - Checks: `./autoresearch.checks.sh` passed
-- Experiment 1 (reactivate deadline-aware batching in `examples/benchmark/scale.zig`):
+- Experiment 1 (`600fc18`, reactivate deadline-aware batching in `examples/benchmark/scale.zig`):
   - Change: stop scheduling new reactivate actors once the phase deadline is reached; measure only actors preloaded in the current batch; remove forced cohort touch-marking.
   - Result: success
   - Primary metric: `493.145s` (**improved by 311.346s, 38.70% faster**)

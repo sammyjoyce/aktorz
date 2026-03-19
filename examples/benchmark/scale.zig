@@ -480,7 +480,6 @@ fn runSoakPhase(alloc: Allocator, io: Io, config: cli.CliConfig, sqlite_path: []
 
 fn verifyExpectedValues(runtime: *durable.Runtime, store: *durable_sqlite.SQLiteNodeStore, workload: *Workload) !void {
     var actor_index: usize = 0;
-    var object_id_buf: [128]u8 = undefined;
     var lookup = try store.initBenchmarkCounterLookup();
     defer lookup.deinit();
 
@@ -492,17 +491,7 @@ fn verifyExpectedValues(runtime: *durable.Runtime, store: *durable_sqlite.SQLite
             defer reply.deinit();
             break :blk try std.fmt.parseUnsigned(u64, reply.bytes, 10);
         } else blk: {
-            const object_id = std.fmt.bufPrint(
-                &object_id_buf,
-                "{d}:{s}:{s}",
-                .{
-                    workload.addresses[actor_index].kind.len,
-                    workload.addresses[actor_index].kind,
-                    workload.addresses[actor_index].key,
-                },
-            ) catch return error.ObjectIdBufferTooSmall;
-
-            break :blk try lookup.valueForObjectId(object_id);
+            break :blk try lookup.valueForObjectId(workload.object_ids[actor_index]);
         };
 
         if (value != workload.expected[actor_index]) return error.UnexpectedFinalValue;
@@ -570,6 +559,7 @@ fn selectedInputPath(mode: cli.BenchmarkMode, paths: cli.SqlitePaths) ?[]const u
 const Workload = struct {
     alloc: Allocator,
     addresses: []durable.Address,
+    object_ids: [][]const u8,
     expected: []u64,
     touched: []bool,
     needs_verify: []bool,
@@ -584,9 +574,23 @@ const Workload = struct {
         const addresses = try alloc.alloc(durable.Address, count);
         errdefer alloc.free(addresses);
 
-        for (addresses, 0..) |*address, index| {
-            const key = try std.fmt.allocPrint(alloc, "bench:actor-{d}", .{index});
-            address.* = .{ .kind = "counter", .key = key };
+        const object_ids = try alloc.alloc([]const u8, count);
+        errdefer alloc.free(object_ids);
+
+        var initialized: usize = 0;
+        errdefer {
+            for (addresses[0..initialized]) |address| alloc.free(address.key);
+            for (object_ids[0..initialized]) |object_id| alloc.free(object_id);
+        }
+
+        while (initialized < count) : (initialized += 1) {
+            const key = try std.fmt.allocPrint(alloc, "bench:actor-{d}", .{initialized});
+            addresses[initialized] = .{ .kind = "counter", .key = key };
+            object_ids[initialized] = try std.fmt.allocPrint(
+                alloc,
+                "{d}:{s}:{s}",
+                .{ addresses[initialized].kind.len, addresses[initialized].kind, key },
+            );
         }
 
         const expected = try alloc.alloc(u64, count);
@@ -608,6 +612,7 @@ const Workload = struct {
         return .{
             .alloc = alloc,
             .addresses = addresses,
+            .object_ids = object_ids,
             .expected = expected,
             .touched = touched,
             .needs_verify = needs_verify,
@@ -621,7 +626,9 @@ const Workload = struct {
 
     pub fn deinit(self: *Workload) void {
         for (self.addresses) |address| self.alloc.free(address.key);
+        for (self.object_ids) |object_id| self.alloc.free(object_id);
         self.alloc.free(self.addresses);
+        self.alloc.free(self.object_ids);
         self.alloc.free(self.expected);
         self.alloc.free(self.touched);
         self.alloc.free(self.needs_verify);

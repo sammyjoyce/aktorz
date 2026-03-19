@@ -74,7 +74,7 @@ Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig b
   - Run C result: success, primary metric `485.063s` (**0.689s faster** than experiment 3 best)
   - Checks: `./autoresearch.checks.sh` passed
   - Keep decision: **keep**
-- Experiment 6 (pending commit):
+- Experiment 6 (`0fb685d`):
   - Change: reuse prepared SQLite statements for passivated-actor verification instead of preparing/finalizing lookup statements for every actor.
   - Rationale: keep experiment 5 semantics while cutting per-actor verification overhead inside the post-phase durable-state lookup path.
   - Run A result: success, primary metric `489.087s`
@@ -82,3 +82,18 @@ Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig b
   - Run C result: success, primary metric `469.816s` (**5.441s faster** than experiment 5 best)
   - Checks: `./autoresearch.checks.sh` passed
   - Keep decision: **keep**
+- Experiment 7 (pending commit):
+  - Change: precompute benchmark object IDs in `Workload` so passivated-actor verification can reuse stable object-id slices instead of formatting them on every lookup.
+  - Rationale: build on experiment 6 by removing per-actor object-id formatting overhead from the durable verification path.
+  - Run A result: success, primary metric `481.309s`
+  - Run B result: success, primary metric `467.712s` (**2.104s faster** than experiment 6 best)
+  - Run C result: success, primary metric `466.179s` (**3.637s faster** than experiment 6 best)
+  - Checks: `./autoresearch.checks.sh` passed
+  - Keep decision: **keep**
+- Experiment 8 (discarded, uncommitted):
+  - Change attempted: collapse passivated-actor durable verification into a single SQL statement returning snapshot bytes plus WAL row count.
+  - Rationale: reduce per-actor SQLite calls even further beyond experiment 7.
+  - Run A result: success, primary metric `479.263s`
+  - Run B result: success, primary metric `468.682s` (**2.503s slower** than experiment 7 best)
+  - Checks: not rerun
+  - Keep decision: **discard** (restore `src/sqlite_store.zig` to the experiment 7 baseline before the next run)

@@ -34,6 +34,11 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - When a loop allocates slices (e.g. hash-map keys), `errdefer` must free **all prior loop allocations**, not just the container. Walk the loop and free each element.
 - Always pair `init`/`deinit`; prefer `defer obj.deinit()` immediately after creation.
 
+### Zig 0.16 Stdlib API Gaps
+- `std.fmt.allocPrintZ` does not exist — use `std.fmt.allocPrint` then `dupeZ` if a sentinel-terminated slice is needed.
+- `std.c.time(null)` is unavailable — use `std.posix.gettimeofday()` and read `.sec` from the `timeval`.
+- `fstatat` returns void for errno — use `std.fs.Dir.cwd().statFile(path)` instead for file size queries.
+
 ### Histogram / Bucket Math
 - Bucket index → upper bound must use `(index + 1) * bucket_width`, not `index * bucket_width`. Off-by-one here silently under-reports all percentile latencies.
 

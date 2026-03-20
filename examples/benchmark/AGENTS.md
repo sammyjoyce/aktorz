@@ -14,6 +14,12 @@
 - Workload uses fixed-seed skewed distribution (80% hot / 20% cold actors).
 - Suite auto-creates DB paths under `.zig-cache/bench/`; rejects existing DB/WAL/SHM files.
 - Post-run verification: in-memory expected counters vs DB actuals.
+- **Message ID partitioning**: IDs encode `phase/segment/counter` (u128) so post-mortem debugging can trace any message to its origin phase and operation.
+- **Instrumentation wrapper pattern**: `instrumentation.zig` wraps `StoreProvider`/`ScopedStore` to collect activation/snapshot/replay counts without modifying core types.
+
+## Design Patterns
+- **Test-first CLI**: Write parse tests that pin defaults, legacy positional args, and new `--mode` flags before implementing the parser. Prevents silent breakage of backward-compat.
+- **Reactivate cohort cap**: Limit measured cohort to 128 actors to bound preload cost — measuring more doesn't improve statistical signal but does slow the phase.
 
 ## Common Pitfalls
 - **Histogram bucket bounds**: `bucketUpperBoundNs` must use `(index + 1) * width`, not `index * width`. The off-by-one silently under-reports p50/p95/p99 by ~1µs.

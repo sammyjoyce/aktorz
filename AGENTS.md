@@ -50,6 +50,22 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - README should be a **landing page** (navigational), not a reference dump. Route readers to examples, docs, and API instead of mixing tutorial/reference/explanation.
 - AGENTS.md stays concise (~30 lines core); use subdirectory AGENTS.md for subsystem-specific guidance.
 
+### Known API Gap: MemoryNodeStore Phantom Objects
+- `MemoryNodeStore.openScoped` calls `getOrCreateObject`, which materializes an empty entry even for non-existent actors. This means `StoreProvider.open().loadSnapshot()` is **not safe as an existence probe** — it will succeed (with no snapshot) and silently create the object.
+- Downstream consumers (e.g. DTW) had to work around this with an explicit `ObjectStateProbe` that checks `snapshot != null or wal.items.len > 0` (memory) or queries `actor_snapshot UNION actor_wal` (SQLite).
+- If adding an existence-check API to aktorz, it should be on `StoreProvider` or `ScopedStore`, not require consumers to reach into store internals.
+
+### Downstream Dependency Integration (Zig Package)
+- `zig fetch --save` in Zig 0.16-dev incorrectly writes `.path = <tarball_url>` instead of `.url`/`.hash` for remote URLs. Always verify `build.zig.zon` manually after running `zig fetch --save`.
+- Correct `build.zig.zon` format for consuming aktorz remotely:
+  ```zig
+  .aktorz = .{
+      .url = "https://github.com/sammyjoyce/aktorz/archive/<commit>.tar.gz",
+      .hash = "<hash-from-zig-fetch>",
+  },
+  ```
+- Consumers import modules as: `aktorz.module("durable_actor")` and optionally `aktorz.module("durable_actor_sqlite")` (which requires `link_libc` + `linkSystemLibrary("sqlite3")`).
+
 ### PR & CI Workflow
 - This repo has **no GitHub Actions CI**. Rely on local `zig build test` / `zig build sqlite-test` and external bot checks (Mesa, Sentry, Gemini).
 - PR body: write to a temp file (`/tmp/pr-body.md`) and pass `--body-file` to avoid shell escaping issues.

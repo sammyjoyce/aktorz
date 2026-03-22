@@ -66,6 +66,27 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
   ```
 - Consumers import modules as: `aktorz.module("durable_actor")` and optionally `aktorz.module("durable_actor_sqlite")` (which requires `link_libc` + `linkSystemLibrary("sqlite3")`).
 
+### Runtime Thread Safety
+- `Runtime.request()` is **not proven thread-safe**. Multi-threaded consumers (e.g. a TCP server with thread-per-connection) must serialize all `runtime.request()` / `runtime.passivate()` calls behind a mutex. A CAS spinlock (`std.atomic.Value(u32)` with `cmpxchgWeak`) is the simplest correct approach — coarse-grained but avoids deadlocks.
+- The runtime rejects reentrant requests with `Error.ReentrantRequest` — an actor's `decide` callback must not call back into the runtime.
+
+### No Built-in Actor Deletion
+- `Runtime` has `passivate(address)` (removes from memory) but no `destroyActor`/`deleteActor`. Store data persists after passivation.
+- To "delete" an actor: send a command that resets state to blank → `passivate` → remove from any external tracking (e.g. token store). Test that re-creating with the same ID starts fresh.
+
+### Object ID Format
+- Internal object IDs follow `{kind.len}:{kind}:{key}` (e.g. `10:dtw_thread:T-uuid`). Consumers can use this format for direct SQLite queries (`actor_snapshot`/`actor_wal` tables) when enumerating actors.
+
+### Downstream Consumer Integration Patterns
+- **Decide/Apply pattern**: actor `decide(alloc, message)` returns `Decision { .mutation, .reply }`; `apply(mutation)` mutates state. Use full state replacement for most commands; incremental mutations (append-only) for high-frequency operations like message appends.
+- **State serialization**: line-oriented `key:hex-value` format is a proven pattern for binary-safe durable state (hex-encode JSON/binary fields per line).
+- **Actor existence tracking**: since `MemoryNodeStore.openScoped` creates phantom objects (see above), consumers should maintain a separate tracking structure (e.g. `TokenStore` / `known_threads` map) rather than probing the runtime.
+- **Test harnesses**: use `MemoryNodeStore` for unit tests and `SQLiteNodeStore` with temp files for persistence/restart tests. Wire with `snapshot_every = 1` for deterministic snapshots.
+
+### Zig 0.16 Time and Formatting
+- No high-level timestamp API in stdlib — use `std.os.linux.clock_gettime(.REALTIME, &ts)` for wall-clock time.
+- Epoch → ISO 8601 formatting requires a custom `formatEpochISO8601` using `std.time.epoch` (no stdlib formatter exists).
+
 ### PR & CI Workflow
 - This repo has **no GitHub Actions CI**. Rely on local `zig build test` / `zig build sqlite-test` and external bot checks (Mesa, Sentry, Gemini).
 - PR body: write to a temp file (`/tmp/pr-body.md`) and pass `--body-file` to avoid shell escaping issues.

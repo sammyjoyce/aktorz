@@ -87,6 +87,21 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - No high-level timestamp API in stdlib — use `std.os.linux.clock_gettime(.REALTIME, &ts)` for wall-clock time.
 - Epoch → ISO 8601 formatting requires a custom `formatEpochISO8601` using `std.time.epoch` (no stdlib formatter exists).
 
+### Reply Ownership and Cleanup
+- `Runtime.request()` returns `?OwnedBytes`. The caller **owns** the reply and must call `reply.deinit()` — use `defer reply.deinit()` immediately after the null check. Forgetting this leaks the reply's backing allocation.
+- Pattern: `const reply = (try runtime.request(addr, id, payload)) orelse return error.ExpectedReply; defer reply.deinit();`
+
+### SQLite Restart Enumeration
+- On startup, consumers must rebuild their known-actor index by scanning SQLite: `SELECT DISTINCT object_id FROM actor_snapshot WHERE object_id LIKE '{kind_len}:{kind}:%' UNION SELECT DISTINCT object_id FROM actor_wal WHERE object_id LIKE '{kind_len}:{kind}:%'`.
+- This is necessary because the runtime has no built-in actor registry — passivated actors exist only in the store.
+
+### Snapshot Encoding Verbosity
+- Each `decide*` method in a consumer typically encodes the full state struct (~20+ fields) manually. This is repetitive but intentional — it keeps the serialization explicit and avoids hidden coupling to struct layout.
+- If adding a snapshot helper to aktorz, it should be opt-in (comptime generic) and not impose a serialization format on consumers.
+
+### Platform-Specific Time APIs
+- `std.os.linux.clock_gettime(.REALTIME, &ts)` only works on Linux — returns 0 on other platforms. Consumers needing cross-platform wall-clock time should use `std.posix.gettimeofday()` (works on Linux + macOS) or `std.time.nanoTimestamp()` for monotonic time.
+
 ### PR & CI Workflow
 - This repo has **no GitHub Actions CI**. Rely on local `zig build test` / `zig build sqlite-test` and external bot checks (Mesa, Sentry, Gemini).
 - PR body: write to a temp file (`/tmp/pr-body.md`) and pass `--body-file` to avoid shell escaping issues.

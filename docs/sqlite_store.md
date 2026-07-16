@@ -32,7 +32,7 @@ For one logical actor instance (`object_id`), it maps the runtime hooks like thi
 
 This backend uses one write transaction for `appendOnce()`. That keeps idempotency and WAL append atomic.
 
-Using `BEGIN IMMEDIATE` asks SQLite for the write lock at transaction start instead of halfway through the write path. That makes lock contention fail earlier and more predictably, which is less gremlin-friendly than a deferred upgrade in the middle of your append.
+Using `BEGIN IMMEDIATE` asks SQLite for the write lock at transaction start instead of halfway through the write path. That makes lock contention fail earlier and more predictably than a deferred lock upgrade in the middle of an append.
 
 ## Build/link requirements
 

@@ -10,6 +10,12 @@ import {
   type RawApi,
 } from "./native-shared.js"
 
+// Pinned to 2.16.3: koffi 3.0.0-3.1.2 corrupt AArch64 callback arguments passed on the
+// stack (9th argument and beyond). arm64.cc CallData::Relay reads stack args via
+// `in_ptr = sp + 48` with offsets `19 * 8 + k` (= sp+200), but arm64_asm.S places them
+// at sp+208. Our DispatchFn takes 10 arguments, so output_ptr/output_capacity land in
+// the corrupted slots. Unfixed on codeberg master as of 3.1.2 (2026-07-21).
+// Related (different bug, same workaround): https://github.com/Koromix/koffi/issues/273
 const requireModule = createRequire(import.meta.url)
 
 type KoffiType = unknown

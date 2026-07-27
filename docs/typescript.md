@@ -7,6 +7,7 @@ The TypeScript package keeps the actor runtime, mailbox, snapshot cadence, and i
 - Node.js 18+ uses [Koffi](https://koffi.dev/) to load the shared library and register C callbacks.
 - Bun uses `bun:ffi` and `JSCallback` with the same native ABI. Bun currently documents `bun:ffi` as experimental, so Node.js/Koffi is the production-safe default.
 - Native artifacts are built for macOS, Linux (glibc and musl), and Windows on x64 and arm64.
+- Koffi is pinned to `2.16.3`. Koffi 3.0.0-3.1.2 corrupt AArch64 callback arguments passed on the stack (the 9th argument and beyond), which silently breaks the dispatch callback's output buffer on arm64. The bug is unfixed upstream as of 3.1.2; see [Koromix/koffi#273](https://github.com/Koromix/koffi/issues/273) for a related report. Do not upgrade without verifying arm64 Node callbacks.
 
 The runtime is intentionally synchronous. `create`, `decide`, `apply`, snapshot, and destroy callbacks must not return promises. This matches aktorz's single-threaded, in-order service execution and means callback exceptions can be returned to the caller without an asynchronous side channel.
 

@@ -1,8 +1,8 @@
 const std = @import("std");
-const core = @import("../core.zig");
-const memory = @import("../memory_store.zig");
+const core = @import("durable_actor");
 
 const Allocator = std.mem.Allocator;
+// ziglint-ignore: Z006 - C ABI constant name is part of the public header contract.
 const ABI_VERSION: u32 = 2;
 const page_allocator = std.heap.page_allocator;
 
@@ -43,13 +43,13 @@ const NativeResult = struct {
     bytes: []u8,
 
     fn create(kind: ResultKind, bytes: []const u8) !*NativeResult {
-        const result = try page_allocator.create(NativeResult);
-        errdefer page_allocator.destroy(result);
-        result.* = .{
+        const created = try page_allocator.create(NativeResult);
+        errdefer page_allocator.destroy(created);
+        created.* = .{
             .kind = kind,
             .bytes = try page_allocator.dupe(u8, bytes),
         };
-        return result;
+        return created;
     }
 
     fn destroy(self: *NativeResult) void {
@@ -261,14 +261,16 @@ const BridgeService = struct {
 
 const RuntimeHandle = struct {
     bridge: Bridge,
-    store: memory.MemoryNodeStore,
+    store: core.MemoryNodeStore,
     runtime: core.Runtime,
 };
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_abi_version() u32 {
     return ABI_VERSION;
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_runtime_create_memory(
     dispatch: ?DispatchFn,
     context: u64,
@@ -277,7 +279,7 @@ pub export fn aktorz_runtime_create_memory(
     const callback = dispatch orelse return null;
     const handle = page_allocator.create(RuntimeHandle) catch return null;
     handle.bridge = Bridge.init(page_allocator, callback, context);
-    handle.store = memory.MemoryNodeStore.init(page_allocator);
+    handle.store = core.MemoryNodeStore.init(page_allocator);
     handle.runtime = core.Runtime.init(
         page_allocator,
         handle.store.asStoreProvider(),
@@ -286,6 +288,7 @@ pub export fn aktorz_runtime_create_memory(
     return handle;
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_runtime_destroy(handle: ?*RuntimeHandle) void {
     const runtime_handle = handle orelse return;
     const previous_bridge = active_bridge;
@@ -299,6 +302,7 @@ pub export fn aktorz_runtime_destroy(handle: ?*RuntimeHandle) void {
     page_allocator.destroy(runtime_handle);
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_runtime_register(
     handle: ?*RuntimeHandle,
     kind_ptr: ?[*]const u8,
@@ -313,6 +317,7 @@ pub export fn aktorz_runtime_register(
     return result(.ok, &.{});
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_runtime_request(
     handle: ?*RuntimeHandle,
     kind_ptr: ?[*]const u8,
@@ -349,6 +354,7 @@ pub export fn aktorz_runtime_request(
     return result(.no_reply, &.{});
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_runtime_tell(
     handle: ?*RuntimeHandle,
     kind_ptr: ?[*]const u8,
@@ -380,6 +386,7 @@ pub export fn aktorz_runtime_tell(
     return result(.ok, &.{});
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_runtime_passivate(
     handle: ?*RuntimeHandle,
     kind_ptr: ?[*]const u8,
@@ -402,6 +409,7 @@ pub export fn aktorz_runtime_passivate(
     return result(if (passivated) .true_value else .false_value, &.{});
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_runtime_passivate_idle(
     handle: ?*RuntimeHandle,
     minimum_idle_ticks_ptr: ?[*]const u8,
@@ -426,6 +434,7 @@ pub export fn aktorz_runtime_passivate_idle(
     return result(.ok, &.{});
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_runtime_shutdown(handle: ?*RuntimeHandle) ?*NativeResult {
     const runtime_handle = handle orelse return null;
     runtime_handle.bridge.clearLastError();
@@ -438,21 +447,25 @@ pub export fn aktorz_runtime_shutdown(handle: ?*RuntimeHandle) ?*NativeResult {
     return result(.ok, &.{});
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_result_kind(native_result: ?*const NativeResult) u32 {
     const value = native_result orelse return @intFromEnum(ResultKind.error_value);
     return @intFromEnum(value.kind);
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_result_data(native_result: ?*const NativeResult) ?[*]const u8 {
     const value = native_result orelse return null;
     return optionalConstPointer(value.bytes);
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_result_length(native_result: ?*const NativeResult) u64 {
     const value = native_result orelse return 0;
     return @intCast(value.bytes.len);
 }
 
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_result_destroy(native_result: ?*NativeResult) void {
     const value = native_result orelse return;
     value.destroy();

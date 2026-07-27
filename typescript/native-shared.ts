@@ -81,9 +81,10 @@ export function decodeCallbackOutput(
   view: (pointer: Pointer, length: number) => Uint8Array,
 ): Uint8Array | null {
   const capacity = toSafeLength(capacityValue, "callback output")
-  if (pointer == null) {
-    if (capacity !== 0) throw new Error("Native aktorz passed a null callback output pointer")
-    return null
-  }
+  // Capacity is authoritative: some FFI bridges hand back a bogus non-null pointer
+  // for an argument the caller passed as null, so a zero capacity is the only
+  // reliable signal that this is the sizing call and no output buffer exists.
+  if (capacity === 0) return null
+  if (pointer == null) throw new Error("Native aktorz passed a null callback output pointer")
   return view(pointer, capacity)
 }

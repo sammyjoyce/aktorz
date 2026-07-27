@@ -1,4 +1,4 @@
-import { copyBytes, encodeDecision, encodeUtf8, toBytes, utf8, writeU64 } from "./codec.js"
+import { copyBytes, encodeDecision, encodeUtf8, toBytes, utf8, writeU64, writeU128 } from "./codec.js"
 import { NativeRuntimeBinding, type NativeDispatch } from "./native.js"
 import type { ActorAddress, ActorDecision, ActorService, BytesLike, RuntimeOptions } from "./types.js"
 
@@ -207,12 +207,10 @@ export class Runtime {
   request(address: ActorAddress, messageId: bigint, payload: BytesLike): Uint8Array | null {
     this.#requireOpen()
     const normalized = normalizeAddress(address)
-    const [high, low] = splitMessageId(messageId)
     return this.#native.request(
       encodeUtf8(normalized.kind),
       encodeUtf8(normalized.key),
-      high,
-      low,
+      encodeMessageId(messageId),
       toBytes(payload),
     )
   }
@@ -220,12 +218,10 @@ export class Runtime {
   tell(address: ActorAddress, messageId: bigint, payload: BytesLike): void {
     this.#requireOpen()
     const normalized = normalizeAddress(address)
-    const [high, low] = splitMessageId(messageId)
     this.#native.tell(
       encodeUtf8(normalized.kind),
       encodeUtf8(normalized.key),
-      high,
-      low,
+      encodeMessageId(messageId),
       toBytes(payload),
     )
   }
@@ -239,7 +235,7 @@ export class Runtime {
   passivateIdle(minimumIdleTicks: bigint): void {
     this.#requireOpen()
     requireU64(minimumIdleTicks, "minimumIdleTicks")
-    this.#native.passivateIdle(minimumIdleTicks)
+    this.#native.passivateIdle(writeU64(minimumIdleTicks))
   }
 
   shutdown(): void {
@@ -299,12 +295,12 @@ function normalizeAddress(address: ActorAddress): ActorAddress {
   return address
 }
 
-function splitMessageId(messageId: bigint): readonly [high: bigint, low: bigint] {
+function encodeMessageId(messageId: bigint): Uint8Array {
   if (typeof messageId !== "bigint") throw new TypeError("messageId must be a bigint")
   if (messageId < 0n || messageId > MAX_U128) {
     throw new RangeError("messageId must be an unsigned 128-bit integer")
   }
-  return [messageId >> 64n, messageId & MAX_U64]
+  return writeU128(messageId)
 }
 
 function requireString(value: unknown, label: string): asserts value is string {

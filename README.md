@@ -1,6 +1,6 @@
 # aktorz
 
-A small Zig package for building lazily activated, single-threaded, stateful services with private durable storage. No external dependencies beyond the Zig standard library (SQLite optional).
+A small Zig package for building lazily activated, single-threaded, stateful services with private durable storage, with native TypeScript bindings for Node.js and Bun. No external Zig dependencies beyond the standard library (SQLite optional).
 
 ## How it works
 
@@ -19,7 +19,7 @@ Requires **Zig 0.16.0-dev.2905** or later. A Nix flake is included:
 
 ```bash
 nix develop          # enter the dev shell
-zig build test       # run core + example tests
+zig build test       # run core + example + TypeScript ABI tests
 zig build sqlite-test  # run SQLite-backed tests (needs system sqlite3)
 ```
 
@@ -30,7 +30,40 @@ zig build cart-gateway                # starts on port 7070
 printf 'kind: cart\nkey: acme:c-42\nmessage-id: 1\ncontent-length: 20\n\nadd|red-socks|2|1299' | nc localhost 7070
 ```
 
-## Add to your project
+## Use from TypeScript
+
+```bash
+npm install aktorz
+```
+
+```ts
+import { Runtime, utf8 } from "aktorz"
+
+const runtime = Runtime.memory({ snapshotEvery: 64 })
+
+runtime.register("counter", {
+  create: () => ({ value: 0 }),
+  loadSnapshot(state, snapshot) {
+    state.value = Number(utf8(snapshot))
+  },
+  makeSnapshot: (state) => String(state.value),
+  decide(state, message) {
+    const delta = Number(utf8(message))
+    return { mutation: String(delta), reply: String(state.value + delta) }
+  },
+  apply(state, mutation) {
+    state.value += Number(utf8(mutation))
+  },
+})
+
+const reply = runtime.request({ kind: "counter", key: "counter-42" }, 1n, "5")
+console.log(reply && utf8(reply))
+runtime.close()
+```
+
+The package loads a Zig shared library through Koffi on Node.js or `bun:ffi` on Bun. Build the host artifact from a checkout with `npm run build`; cross-build the complete package matrix with `npm run build:native:all`. See [`docs/typescript.md`](docs/typescript.md) for the callback contract, supported targets, ABI ownership, and packaging details.
+
+## Add to your Zig project
 
 In your `build.zig.zon`, add the dependency:
 
@@ -141,8 +174,12 @@ Bank account commands: `deposit|<cents>|<memo>`, `withdraw|<cents>|<memo>`, `set
 ## Build steps
 
 ```bash
-zig build test           # core + example tests
+zig build test           # core + example + TypeScript ABI tests
 zig build sqlite-test    # SQLite + benchmark tests
+zig build typescript-native -Doptimize=ReleaseFast  # native TypeScript library
+npm run build            # TypeScript + current-host native artifact
+npm run test:node        # Node.js integration smoke test
+npm run test:bun         # Bun integration smoke test
 zig build -Doptimize=ReleaseFast bench                   # default SQLite suite
 zig build -Doptimize=ReleaseFast bench -- --mode micro --scenario memory_hot --ops 1000000
 ```
@@ -182,8 +219,10 @@ Key flags:
 
 - Call `shutdown()` before `deinit()` to snapshot and passivate active services cleanly. `deinit()` only releases memory.
 - `actor_seen_message` is retained so old retries are still recognized as duplicates. Idempotency history grows unless you choose a retention policy.
+- TypeScript actor callbacks are synchronous by design; promises are not supported inside a native request.
 
 ## Further reading
 
+- [`docs/typescript.md`](docs/typescript.md) — TypeScript API, native ABI, and packaging
 - [`docs/sqlite_store.md`](docs/sqlite_store.md) — SQLite store design
 - [`docs/sqlite_schema.sql`](docs/sqlite_schema.sql) — SQLite schema

@@ -70,7 +70,7 @@ export function loadNodeApi(path: string): RawApi {
     "uint64_t",
     "const uint8_t *",
     "uint64_t",
-    "uint64_t",
+    "const uint8_t *",
     "uint64_t",
     "const uint8_t *",
     "uint64_t",
@@ -81,7 +81,7 @@ export function loadNodeApi(path: string): RawApi {
     "uint64_t",
     "const uint8_t *",
     "uint64_t",
-    "uint64_t",
+    "const uint8_t *",
     "uint64_t",
     "const uint8_t *",
     "uint64_t",
@@ -95,6 +95,7 @@ export function loadNodeApi(path: string): RawApi {
   ])
   const runtimePassivateIdle = library.func("aktorz_runtime_passivate_idle", "void *", [
     "void *",
+    "const uint8_t *",
     "uint64_t",
   ])
   const runtimeShutdown = library.func("aktorz_runtime_shutdown", "void *", ["void *"])
@@ -143,7 +144,7 @@ export function loadNodeApi(path: string): RawApi {
     runtimeDestroy: (runtime) => void runtimeDestroy(runtime),
     runtimeRegister: (runtime, kind) =>
       normalizePointer(runtimeRegister(runtime, input(kind), BigInt(kind.byteLength))),
-    runtimeRequest: (runtime, kind, key, high, low, payload) =>
+    runtimeRequest: (runtime, kind, key, messageId, payload) =>
       normalizePointer(
         runtimeRequest(
           runtime,
@@ -151,13 +152,13 @@ export function loadNodeApi(path: string): RawApi {
           BigInt(kind.byteLength),
           input(key),
           BigInt(key.byteLength),
-          high,
-          low,
+          input(messageId),
+          BigInt(messageId.byteLength),
           input(payload),
           BigInt(payload.byteLength),
         ),
       ),
-    runtimeTell: (runtime, kind, key, high, low, payload) =>
+    runtimeTell: (runtime, kind, key, messageId, payload) =>
       normalizePointer(
         runtimeTell(
           runtime,
@@ -165,8 +166,8 @@ export function loadNodeApi(path: string): RawApi {
           BigInt(kind.byteLength),
           input(key),
           BigInt(key.byteLength),
-          high,
-          low,
+          input(messageId),
+          BigInt(messageId.byteLength),
           input(payload),
           BigInt(payload.byteLength),
         ),
@@ -182,7 +183,7 @@ export function loadNodeApi(path: string): RawApi {
         ),
       ),
     runtimePassivateIdle: (runtime, ticks) =>
-      normalizePointer(runtimePassivateIdle(runtime, ticks)),
+      normalizePointer(runtimePassivateIdle(runtime, input(ticks), BigInt(ticks.byteLength))),
     runtimeShutdown: (runtime) => normalizePointer(runtimeShutdown(runtime)),
     resultKind: (result) => Number(resultKind(result)),
     resultData: (result) => normalizePointer(resultData(result)),

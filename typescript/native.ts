@@ -15,7 +15,7 @@ import {
 
 export type { NativeDispatch } from "./native-shared.js"
 
-const ABI_VERSION = 1
+const ABI_VERSION = 2
 
 const ResultKind = {
   ok: 0,
@@ -59,12 +59,11 @@ export class NativeRuntimeBinding {
   request(
     kind: Uint8Array,
     key: Uint8Array,
-    messageHigh: bigint,
-    messageLow: bigint,
+    messageId: Uint8Array,
     payload: Uint8Array,
   ): Uint8Array | null {
     const result = this.#readResult(
-      this.#api.runtimeRequest(this.#requireOpen(), kind, key, messageHigh, messageLow, payload),
+      this.#api.runtimeRequest(this.#requireOpen(), kind, key, messageId, payload),
       "request actor",
     )
     if (result.kind === ResultKind.reply) return result.bytes
@@ -75,12 +74,11 @@ export class NativeRuntimeBinding {
   tell(
     kind: Uint8Array,
     key: Uint8Array,
-    messageHigh: bigint,
-    messageLow: bigint,
+    messageId: Uint8Array,
     payload: Uint8Array,
   ): void {
     this.#expectOk(
-      this.#api.runtimeTell(this.#requireOpen(), kind, key, messageHigh, messageLow, payload),
+      this.#api.runtimeTell(this.#requireOpen(), kind, key, messageId, payload),
       "tell actor",
     )
   }
@@ -95,7 +93,7 @@ export class NativeRuntimeBinding {
     throw new Error(`Unexpected native result kind ${result.kind} while passivating actor`)
   }
 
-  passivateIdle(minimumIdleTicks: bigint): void {
+  passivateIdle(minimumIdleTicks: Uint8Array): void {
     this.#expectOk(
       this.#api.runtimePassivateIdle(this.#requireOpen(), minimumIdleTicks),
       "passivate idle actors",

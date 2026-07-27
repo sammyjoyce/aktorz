@@ -35,6 +35,14 @@ export function writeU64(value: bigint): Uint8Array {
   return bytes
 }
 
+export function writeU128(value: bigint): Uint8Array {
+  const bytes = new Uint8Array(16)
+  const view = new DataView(bytes.buffer)
+  view.setBigUint64(0, value & ((1n << 64n) - 1n), true)
+  view.setBigUint64(8, value >> 64n, true)
+  return bytes
+}
+
 export function encodeDecision(decision: ActorDecision): Uint8Array {
   const mutation = decision.mutation == null ? null : toBytes(decision.mutation)
   const reply = decision.reply == null ? null : toBytes(decision.reply)

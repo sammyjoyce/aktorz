@@ -37,6 +37,11 @@ class ServiceBridge {
   readonly #outputs = new Map<bigint, Uint8Array>()
   readonly #errors = new Map<bigint, Uint8Array>()
   #nextServiceId = 1n
+  #dispatchDepth = 0
+
+  get dispatching(): boolean {
+    return this.#dispatchDepth > 0
+  }
 
   readonly dispatch: NativeDispatch = (
     _context,
@@ -57,19 +62,24 @@ class ServiceBridge {
 
     const pending = this.#outputs.get(callId)
     if (pending !== undefined) {
-      return BigInt(pending.byteLength)
+      return pending.byteLength
     }
 
     try {
-      const result = this.#execute(operation, serviceId, input1, input2)
-      if (result.byteLength > 0) {
-        this.#outputs.set(callId, result)
+      this.#dispatchDepth += 1
+      try {
+        const result = this.#execute(operation, serviceId, input1, input2)
+        if (result.byteLength > 0) {
+          this.#outputs.set(callId, result)
+        }
+        return result.byteLength
+      } finally {
+        this.#dispatchDepth -= 1
       }
-      return BigInt(result.byteLength)
     } catch (error) {
       this.#outputs.delete(callId)
       this.#errors.set(callId, encodeUtf8(errorMessage(error)))
-      return -1n
+      return -1
     }
   }
 
@@ -141,11 +151,11 @@ class ServiceBridge {
     return instance
   }
 
-  #writePendingOutput(callId: bigint, output: Uint8Array): bigint {
+  #writePendingOutput(callId: bigint, output: Uint8Array): number {
     const pending = this.#outputs.get(callId)
     if (pending === undefined) {
       this.#errors.set(callId, encodeUtf8(`No pending callback output for call ${callId}`))
-      return -1n
+      return -1
     }
     if (output.byteLength < pending.byteLength) {
       this.#outputs.delete(callId)
@@ -153,23 +163,23 @@ class ServiceBridge {
         callId,
         encodeUtf8(`Callback output buffer is ${output.byteLength} bytes; ${pending.byteLength} bytes are required`),
       )
-      return -1n
+      return -1
     }
 
     output.set(pending)
     this.#outputs.delete(callId)
-    return BigInt(pending.byteLength)
+    return pending.byteLength
   }
 
-  #dispatchError(callId: bigint, output: Uint8Array | null): bigint {
+  #dispatchError(callId: bigint, output: Uint8Array | null): number {
     const error = this.#errors.get(callId)
-    if (error === undefined) return 0n
-    if (output === null) return BigInt(error.byteLength)
-    if (output.byteLength < error.byteLength) return -1n
+    if (error === undefined) return 0
+    if (output === null) return error.byteLength
+    if (output.byteLength < error.byteLength) return -1
 
     output.set(error)
     this.#errors.delete(callId)
-    return BigInt(error.byteLength)
+    return error.byteLength
   }
 }
 
@@ -245,6 +255,9 @@ export class Runtime {
 
   close(): void {
     if (this.#closed) return
+    if (this.#bridge.dispatching) {
+      throw new Error("Cannot close the aktorz runtime from inside an actor callback")
+    }
     this.#closed = true
     this.#native.close()
   }

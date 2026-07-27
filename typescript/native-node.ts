@@ -64,6 +64,15 @@ export function loadNodeApi(path: string): RawApi {
     "uint64_t",
     "uint32_t",
   ])
+  const runtimeCreateSQLite = library.func("aktorz_runtime_create_sqlite", "void *", [
+    dispatchPointerType,
+    "uint64_t",
+    "uint32_t",
+    "const uint8_t *",
+    "uint64_t",
+    "uint32_t",
+  ])
+  const runtimeCreateError = library.func("aktorz_runtime_create_error", "void *", [])
   const runtimeDestroy = library.func("aktorz_runtime_destroy", "void", ["void *"])
   const runtimeRegister = library.func("aktorz_runtime_register", "void *", [
     "void *",
@@ -147,6 +156,18 @@ export function loadNodeApi(path: string): RawApi {
     },
     runtimeCreateMemory: (dispatch, context, snapshotEvery) =>
       normalizePointer(runtimeCreateMemory(dispatch, context, snapshotEvery)),
+    runtimeCreateSQLite: (dispatch, context, snapshotEvery, pathBytes, busyTimeoutMs) =>
+      normalizePointer(
+        runtimeCreateSQLite(
+          dispatch,
+          context,
+          snapshotEvery,
+          input(pathBytes),
+          BigInt(pathBytes.byteLength),
+          busyTimeoutMs,
+        ),
+      ),
+    runtimeCreateError: () => normalizePointer(runtimeCreateError()),
     runtimeDestroy: (runtime) => void runtimeDestroy(runtime),
     runtimeRegister: (runtime, kind) =>
       normalizePointer(runtimeRegister(runtime, input(kind), BigInt(kind.byteLength))),

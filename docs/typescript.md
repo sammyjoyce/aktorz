@@ -7,9 +7,10 @@ The TypeScript package keeps the actor runtime, mailbox, snapshot cadence, and i
 - Node.js 18+ uses [Koffi](https://koffi.dev/) to load the shared library and register C callbacks.
 - Bun uses `bun:ffi` and `JSCallback` with the same native ABI. Bun currently documents `bun:ffi` as experimental, so Node.js/Koffi is the production-safe default.
 - Native artifacts are built for macOS, Linux (glibc and musl), and Windows on x64 and arm64.
+- Every packaged native artifact statically includes the SQLite amalgamation used by `Runtime.sqlite()`. Consumers do not need a system SQLite library.
 - Koffi is pinned to `2.16.3`. Koffi 3.0.0-3.1.2 corrupt AArch64 callback arguments passed on the stack (the 9th argument and beyond), which silently breaks the dispatch callback's output buffer on arm64. The bug is unfixed upstream as of 3.1.2; see [Koromix/koffi#273](https://github.com/Koromix/koffi/issues/273) for a related report. Do not upgrade without verifying arm64 Node callbacks.
 
-The runtime is intentionally synchronous. `create`, `decide`, `apply`, snapshot, and destroy callbacks must not return promises. This matches aktorz's single-threaded, in-order service execution and means callback exceptions can be returned to the caller without an asynchronous side channel.
+The runtime is intentionally synchronous. `create`, `decide`, `apply`, snapshot, and destroy callbacks must not return promises. This matches aktorz's single-threaded, in-order actor execution and means callback exceptions can be returned to the caller without an asynchronous side channel.
 
 ## Install and build
 
@@ -31,7 +32,7 @@ npm run test:node
 
 On Linux, glibc is selected automatically. Set `AKTORZ_LIBC=musl` for Alpine or another musl host. Set `AKTORZ_LIBRARY_PATH=/absolute/path/to/libaktorz.so` (or `.dylib`/`.dll`) to override the packaged library.
 
-## Actor service
+## In-memory runtime
 
 ```ts
 import { Runtime, utf8 } from "aktorz"
@@ -66,17 +67,33 @@ console.log(reply && utf8(reply)) // 5
 runtime.close()
 ```
 
+## SQLite runtime
+
+Use the same actor service with a durable local store:
+
+```ts
+const runtime = Runtime.sqlite({
+  path: ".pi/actors.sqlite3",
+  snapshotEvery: 64,
+  busyTimeoutMs: 5_000,
+})
+```
+
+`path` is required and its parent directory must exist. `busyTimeoutMs` defaults to `5_000`. SQLite opens in WAL mode with `synchronous=FULL`; schema creation happens before the constructor returns. Native open and schema errors are transferred through the result-handle ABI and surfaced as JavaScript exceptions.
+
+Calling `close()` performs a clean runtime shutdown, snapshots active actors, closes SQLite, unregisters the callback, and unloads the native library. A new `Runtime.sqlite()` pointed at the same path replays snapshots and WAL mutations. Persisted message IDs continue to deduplicate retries after process restart and return the original persisted reply.
+
 `messageId` is a JavaScript `bigint` in the full unsigned 128-bit range. When a decision persists a mutation, reusing its message ID for the same actor returns the previously persisted reply and does not apply the mutation again.
 
 ## Native ABI ownership
 
-The ABI never exposes Zig-owned reply memory without an explicit result handle. TypeScript copies result bytes, then calls `aktorz_result_destroy`. Callback output uses a two-call size/query protocol: Zig asks for the required byte count, allocates the destination, then asks TypeScript to fill it. Callback failures are transferred through the same protocol and surfaced as JavaScript errors.
+The ABI never exposes Zig-owned reply memory without an explicit result handle. TypeScript copies result bytes, then calls `aktorz_result_destroy`. Callback output uses a two-call size/query protocol: Zig asks for the required byte count, allocates the destination, then asks TypeScript to fill it. Callback and runtime-creation failures are transferred through result handles and surfaced as JavaScript errors.
 
-The current ABI version is `2`, reported by `aktorz_abi_version()`. Full-width `u64` and `u128` values cross the boundary as fixed little-endian byte buffers, avoiding JavaScript number precision loss in Bun FFI. The TypeScript loader rejects a mismatched shared library before creating a runtime.
+The current ABI version is `3`, reported by `aktorz_abi_version()`. ABI v3 adds `aktorz_runtime_create_sqlite()` and `aktorz_runtime_create_error()` while retaining the ABI v2 memory-runtime entry points. Full-width `u64` and `u128` values cross the boundary as fixed little-endian byte buffers, avoiding JavaScript number precision loss in Bun FFI. The TypeScript loader rejects a mismatched shared library before creating a runtime.
 
 ## Packaging
 
-The package expects artifacts under:
+The package expects self-contained artifacts under:
 
 ```text
 native/

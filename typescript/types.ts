@@ -32,3 +32,10 @@ export interface RuntimeOptions {
   /** Override the packaged native library. Also available as AKTORZ_LIBRARY_PATH. */
   readonly libraryPath?: string
 }
+
+export interface SQLiteRuntimeOptions extends RuntimeOptions {
+  /** SQLite database path. Parent directories must already exist. */
+  readonly path: string
+  /** Time to wait for a locked database before failing. Defaults to 5 seconds. */
+  readonly busyTimeoutMs?: number
+}

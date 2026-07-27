@@ -1,15 +1,33 @@
 const std = @import("std");
 const ziglint = @import("ziglint");
 
-fn linkSqlite(mod: *std.Build.Module) void {
+fn linkBundledSqlite(mod: *std.Build.Module, sqlite_library: *std.Build.Step.Compile) void {
     mod.link_libc = true;
-    mod.linkSystemLibrary("sqlite3", .{});
+    mod.linkLibrary(sqlite_library);
 }
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const ziglint_dep = b.dependency("ziglint", .{ .optimize = .ReleaseFast });
+    const sqlite_source = b.dependency("sqlite3", .{});
+
+    const sqlite_library = b.addLibrary(.{
+        .name = "sqlite3",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    sqlite_library.root_module.addCSourceFile(.{
+        .file = sqlite_source.path("sqlite3.c"),
+        .flags = &.{
+            "-DSQLITE_THREADSAFE=1",
+            "-DSQLITE_OMIT_LOAD_EXTENSION",
+            "-DSQLITE_DEFAULT_FOREIGN_KEYS=1",
+        },
+    });
 
     const lint_step = ziglint.addLint(b, ziglint_dep, &.{
         b.path("src"),
@@ -30,6 +48,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     sqlite_module.addImport("durable_actor", durable_module);
+    sqlite_module.addIncludePath(sqlite_source.path(""));
 
     const typescript_module = b.createModule(.{
         .root_source_file = b.path("src/typescript/ffi.zig"),
@@ -37,6 +56,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     typescript_module.addImport("durable_actor", durable_module);
+    typescript_module.addImport("durable_actor_sqlite", sqlite_module);
+    linkBundledSqlite(typescript_module, sqlite_library);
 
     const typescript_library = b.addLibrary(.{
         .name = "aktorz",
@@ -65,6 +86,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     typescript_test_module.addImport("durable_actor", durable_module);
+    typescript_test_module.addImport("durable_actor_sqlite", sqlite_module);
+    linkBundledSqlite(typescript_test_module, sqlite_library);
     const typescript_tests = b.addTest(.{ .root_module = typescript_test_module });
     test_step.dependOn(&b.addRunArtifact(typescript_tests).step);
 
@@ -96,7 +119,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     sqlite_tests.root_module.addImport("durable_actor", durable_module);
-    linkSqlite(sqlite_tests.root_module);
+    sqlite_tests.root_module.addIncludePath(sqlite_source.path(""));
+    linkBundledSqlite(sqlite_tests.root_module, sqlite_library);
 
     const run_sqlite_tests = b.addRunArtifact(sqlite_tests);
     const sqlite_test_step = b.step("sqlite-test", "Run SQLite-backed durable_actor tests");
@@ -111,7 +135,7 @@ pub fn build(b: *std.Build) void {
     });
     benchmark_tests.root_module.addImport("durable_actor", durable_module);
     benchmark_tests.root_module.addImport("durable_actor_sqlite", sqlite_module);
-    linkSqlite(benchmark_tests.root_module);
+    linkBundledSqlite(benchmark_tests.root_module, sqlite_library);
     sqlite_test_step.dependOn(&b.addRunArtifact(benchmark_tests).step);
 
     const gateway_example = b.addExecutable(.{
@@ -143,7 +167,7 @@ pub fn build(b: *std.Build) void {
     });
     sqlite_gateway_example.root_module.addImport("durable_actor", durable_module);
     sqlite_gateway_example.root_module.addImport("durable_actor_sqlite", sqlite_module);
-    linkSqlite(sqlite_gateway_example.root_module);
+    linkBundledSqlite(sqlite_gateway_example.root_module, sqlite_library);
     b.installArtifact(sqlite_gateway_example);
 
     const run_sqlite_gateway = b.addRunArtifact(sqlite_gateway_example);
@@ -164,7 +188,7 @@ pub fn build(b: *std.Build) void {
     });
     benchmark_example.root_module.addImport("durable_actor", durable_module);
     benchmark_example.root_module.addImport("durable_actor_sqlite", sqlite_module);
-    linkSqlite(benchmark_example.root_module);
+    linkBundledSqlite(benchmark_example.root_module, sqlite_library);
     b.installArtifact(benchmark_example);
 
     const run_benchmark = b.addRunArtifact(benchmark_example);

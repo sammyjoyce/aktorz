@@ -1,9 +1,10 @@
 const std = @import("std");
 const core = @import("durable_actor");
+const sqlite = @import("durable_actor_sqlite");
 
 const Allocator = std.mem.Allocator;
 // ziglint-ignore: Z006 - C ABI constant name is part of the public header contract.
-const ABI_VERSION: u32 = 2;
+const ABI_VERSION: u32 = 3;
 const page_allocator = std.heap.page_allocator;
 
 const Operation = enum(u32) {
@@ -203,6 +204,21 @@ const Bridge = struct {
 };
 
 threadlocal var active_bridge: ?*Bridge = null;
+threadlocal var runtime_create_error: ?[]u8 = null;
+
+fn clearRuntimeCreateError() void {
+    if (runtime_create_error) |message| page_allocator.free(message);
+    runtime_create_error = null;
+}
+
+fn setRuntimeCreateError(message: []const u8) void {
+    clearRuntimeCreateError();
+    runtime_create_error = page_allocator.dupe(u8, message) catch null;
+}
+
+fn setRuntimeCreateErrorFromError(err: anyerror) void {
+    setRuntimeCreateError(@errorName(err));
+}
 
 const BridgeService = struct {
     bridge: *Bridge,
@@ -259,11 +275,53 @@ const BridgeService = struct {
     }
 };
 
+const RuntimeStore = union(enum) {
+    memory: core.MemoryNodeStore,
+    sqlite: sqlite.SQLiteNodeStore,
+
+    fn asStoreProvider(self: *RuntimeStore) core.StoreProvider {
+        return switch (self.*) {
+            .memory => |*store| store.asStoreProvider(),
+            .sqlite => |*store| store.asStoreProvider(),
+        };
+    }
+
+    fn deinit(self: *RuntimeStore) void {
+        switch (self.*) {
+            .memory => |*store| store.deinit(),
+            .sqlite => |*store| store.deinit(),
+        }
+        self.* = undefined;
+    }
+};
+
 const RuntimeHandle = struct {
     bridge: Bridge,
-    store: core.MemoryNodeStore,
+    store: RuntimeStore,
     runtime: core.Runtime,
 };
+
+fn createRuntime(
+    dispatch: DispatchFn,
+    context: u64,
+    snapshot_every: u32,
+    store: RuntimeStore,
+) ?*RuntimeHandle {
+    const handle = page_allocator.create(RuntimeHandle) catch {
+        var owned_store = store;
+        owned_store.deinit();
+        setRuntimeCreateErrorFromError(error.OutOfMemory);
+        return null;
+    };
+    handle.bridge = Bridge.init(page_allocator, dispatch, context);
+    handle.store = store;
+    handle.runtime = core.Runtime.init(
+        page_allocator,
+        handle.store.asStoreProvider(),
+        .{ .snapshot_every = snapshot_every },
+    );
+    return handle;
+}
 
 // ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_abi_version() u32 {
@@ -276,16 +334,62 @@ pub export fn aktorz_runtime_create_memory(
     context: u64,
     snapshot_every: u32,
 ) ?*RuntimeHandle {
-    const callback = dispatch orelse return null;
-    const handle = page_allocator.create(RuntimeHandle) catch return null;
-    handle.bridge = Bridge.init(page_allocator, callback, context);
-    handle.store = core.MemoryNodeStore.init(page_allocator);
-    handle.runtime = core.Runtime.init(
-        page_allocator,
-        handle.store.asStoreProvider(),
-        .{ .snapshot_every = snapshot_every },
+    clearRuntimeCreateError();
+    const callback = dispatch orelse {
+        setRuntimeCreateError("MissingTypeScriptDispatch");
+        return null;
+    };
+    return createRuntime(
+        callback,
+        context,
+        snapshot_every,
+        .{ .memory = core.MemoryNodeStore.init(page_allocator) },
     );
-    return handle;
+}
+
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
+pub export fn aktorz_runtime_create_sqlite(
+    dispatch: ?DispatchFn,
+    context: u64,
+    snapshot_every: u32,
+    path_ptr: ?[*]const u8,
+    path_len: u64,
+    busy_timeout_ms: u32,
+) ?*RuntimeHandle {
+    clearRuntimeCreateError();
+    const callback = dispatch orelse {
+        setRuntimeCreateError("MissingTypeScriptDispatch");
+        return null;
+    };
+    const path = inputSlice(path_ptr, path_len) catch |err| {
+        setRuntimeCreateErrorFromError(err);
+        return null;
+    };
+    if (path.len == 0) {
+        setRuntimeCreateError("EmptySQLitePath");
+        return null;
+    }
+    if (std.mem.indexOfScalar(u8, path, 0) != null) {
+        setRuntimeCreateError("SQLitePathContainsNul");
+        return null;
+    }
+
+    const store = sqlite.SQLiteNodeStore.init(page_allocator, path, .{
+        .busy_timeout_ms = busy_timeout_ms,
+        .enable_wal = true,
+        .synchronous = .full,
+    }) catch |err| {
+        setRuntimeCreateErrorFromError(err);
+        return null;
+    };
+    return createRuntime(callback, context, snapshot_every, .{ .sqlite = store });
+}
+
+// ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
+pub export fn aktorz_runtime_create_error() ?*NativeResult {
+    const message = runtime_create_error orelse return null;
+    defer clearRuntimeCreateError();
+    return result(.error_value, message);
 }
 
 // ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
@@ -560,4 +664,13 @@ test "decision envelopes preserve empty present values" {
     try std.testing.expect(decision.reply != null);
     try std.testing.expectEqual(@as(usize, 0), decision.mutation.?.bytes.len);
     try std.testing.expectEqual(@as(usize, 0), decision.reply.?.bytes.len);
+}
+
+test "runtime creation errors transfer through result handles" {
+    setRuntimeCreateError("SQLiteCantOpen");
+    const native_result = aktorz_runtime_create_error() orelse return error.MissingCreationError;
+    defer native_result.destroy();
+    try std.testing.expectEqual(ResultKind.error_value, native_result.kind);
+    try std.testing.expectEqualStrings("SQLiteCantOpen", native_result.bytes);
+    try std.testing.expect(runtime_create_error == null);
 }

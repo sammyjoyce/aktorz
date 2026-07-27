@@ -37,6 +37,11 @@ export function loadBunApi(path: string): RawApi {
   const library = bun.dlopen(path, {
     aktorz_abi_version: { args: [], returns: "u32" },
     aktorz_runtime_create_memory: { args: ["ptr", "u64", "u32"], returns: "ptr" },
+    aktorz_runtime_create_sqlite: {
+      args: ["ptr", "u64", "u32", "ptr", "u64", "u32"],
+      returns: "ptr",
+    },
+    aktorz_runtime_create_error: { args: [], returns: "ptr" },
     aktorz_runtime_destroy: { args: ["ptr"], returns: "void" },
     aktorz_runtime_register: { args: ["ptr", "ptr", "u64"], returns: "ptr" },
     aktorz_runtime_request: {
@@ -63,6 +68,8 @@ export function loadBunApi(path: string): RawApi {
 
   const abiVersion = symbol("aktorz_abi_version")
   const runtimeCreateMemory = symbol("aktorz_runtime_create_memory")
+  const runtimeCreateSQLite = symbol("aktorz_runtime_create_sqlite")
+  const runtimeCreateError = symbol("aktorz_runtime_create_error")
   const runtimeDestroy = symbol("aktorz_runtime_destroy")
   const runtimeRegister = symbol("aktorz_runtime_register")
   const runtimeRequest = symbol("aktorz_runtime_request")
@@ -122,6 +129,18 @@ export function loadBunApi(path: string): RawApi {
     },
     runtimeCreateMemory: (dispatch, context, snapshotEvery) =>
       normalizePointer(runtimeCreateMemory(dispatch, context, snapshotEvery)),
+    runtimeCreateSQLite: (dispatch, context, snapshotEvery, pathBytes, busyTimeoutMs) =>
+      normalizePointer(
+        runtimeCreateSQLite(
+          dispatch,
+          context,
+          snapshotEvery,
+          input(pathBytes),
+          BigInt(pathBytes.byteLength),
+          busyTimeoutMs,
+        ),
+      ),
+    runtimeCreateError: () => normalizePointer(runtimeCreateError()),
     runtimeDestroy: (runtime) => void runtimeDestroy(runtime),
     runtimeRegister: (runtime, kind) =>
       normalizePointer(runtimeRegister(runtime, input(kind), BigInt(kind.byteLength))),

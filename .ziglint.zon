@@ -1,0 +1,22 @@
+.{
+    .paths = .{
+        "src",
+        "examples",
+        "build.zig",
+    },
+    // ziglint has no baseline support, so existing findings cannot be grandfathered.
+    // The rules below are disabled for those existing findings until they are migrated.
+    .rules = .{
+        .Z004 = .{ .enabled = false },
+        .Z010 = .{ .enabled = false },
+        .Z011 = .{ .enabled = false },
+        .Z012 = .{ .enabled = false },
+        .Z017 = .{ .enabled = false },
+        .Z023 = .{ .enabled = false },
+        .Z024 = .{ .enabled = false },
+        .Z026 = .{ .enabled = false },
+        .Z028 = .{ .enabled = false },
+        .Z030 = .{ .enabled = false },
+        .Z032 = .{ .enabled = false },
+    },
+}

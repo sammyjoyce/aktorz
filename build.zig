@@ -1,4 +1,5 @@
 const std = @import("std");
+const ziglint = @import("ziglint");
 
 fn linkSqlite(mod: *std.Build.Module) void {
     mod.link_libc = true;
@@ -8,6 +9,14 @@ fn linkSqlite(mod: *std.Build.Module) void {
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const ziglint_dep = b.dependency("ziglint", .{ .optimize = .ReleaseFast });
+
+    const lint_step = ziglint.addLint(b, ziglint_dep, &.{
+        b.path("src"),
+        b.path("examples"),
+        b.path("build.zig"),
+    });
+    b.step("lint", "Run ziglint").dependOn(lint_step);
 
     const durable_module = b.addModule("durable_actor", .{
         .root_source_file = b.path("src/durable_actor.zig"),

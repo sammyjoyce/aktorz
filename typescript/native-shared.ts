@@ -8,7 +8,7 @@ export type NativeDispatch = (
   input1: Uint8Array,
   input2: Uint8Array,
   output: Uint8Array | null,
-) => bigint
+) => number
 
 export type Pointer = unknown
 

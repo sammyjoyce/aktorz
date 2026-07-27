@@ -5,7 +5,7 @@ The TypeScript package keeps the actor runtime, mailbox, snapshot cadence, and i
 ## Runtime support
 
 - Node.js 18+ uses [Koffi](https://koffi.dev/) to load the shared library and register C callbacks.
-- Bun uses `bun:ffi` and `JSCallback` with the same native ABI.
+- Bun uses `bun:ffi` and `JSCallback` with the same native ABI. Bun currently documents `bun:ffi` as experimental, so Node.js/Koffi is the production-safe default.
 - Native artifacts are built for macOS, Linux (glibc and musl), and Windows on x64 and arm64.
 
 The runtime is intentionally synchronous. `create`, `decide`, `apply`, snapshot, and destroy callbacks must not return promises. This matches aktorz's single-threaded, in-order service execution and means callback exceptions can be returned to the caller without an asynchronous side channel.
@@ -65,13 +65,13 @@ console.log(reply && utf8(reply)) // 5
 runtime.close()
 ```
 
-`messageId` is a JavaScript `bigint` in the full unsigned 128-bit range. Reusing it for the same actor returns the previously persisted reply and does not apply the mutation again.
+`messageId` is a JavaScript `bigint` in the full unsigned 128-bit range. When a decision persists a mutation, reusing its message ID for the same actor returns the previously persisted reply and does not apply the mutation again.
 
 ## Native ABI ownership
 
 The ABI never exposes Zig-owned reply memory without an explicit result handle. TypeScript copies result bytes, then calls `aktorz_result_destroy`. Callback output uses a two-call size/query protocol: Zig asks for the required byte count, allocates the destination, then asks TypeScript to fill it. Callback failures are transferred through the same protocol and surfaced as JavaScript errors.
 
-The current ABI version is `1`, reported by `aktorz_abi_version()`. The TypeScript loader rejects a mismatched shared library before creating a runtime.
+The current ABI version is `2`, reported by `aktorz_abi_version()`. Full-width `u64` and `u128` values cross the boundary as fixed little-endian byte buffers, avoiding JavaScript number precision loss in Bun FFI. The TypeScript loader rejects a mismatched shared library before creating a runtime.
 
 ## Packaging
 

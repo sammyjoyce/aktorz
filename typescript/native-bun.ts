@@ -40,15 +40,15 @@ export function loadBunApi(path: string): RawApi {
     aktorz_runtime_destroy: { args: ["ptr"], returns: "void" },
     aktorz_runtime_register: { args: ["ptr", "ptr", "u64"], returns: "ptr" },
     aktorz_runtime_request: {
-      args: ["ptr", "ptr", "u64", "ptr", "u64", "u64", "u64", "ptr", "u64"],
+      args: ["ptr", "ptr", "u64", "ptr", "u64", "ptr", "u64", "ptr", "u64"],
       returns: "ptr",
     },
     aktorz_runtime_tell: {
-      args: ["ptr", "ptr", "u64", "ptr", "u64", "u64", "u64", "ptr", "u64"],
+      args: ["ptr", "ptr", "u64", "ptr", "u64", "ptr", "u64", "ptr", "u64"],
       returns: "ptr",
     },
     aktorz_runtime_passivate: { args: ["ptr", "ptr", "u64", "ptr", "u64"], returns: "ptr" },
-    aktorz_runtime_passivate_idle: { args: ["ptr", "u64"], returns: "ptr" },
+    aktorz_runtime_passivate_idle: { args: ["ptr", "ptr", "u64"], returns: "ptr" },
     aktorz_runtime_shutdown: { args: ["ptr"], returns: "ptr" },
     aktorz_result_kind: { args: ["ptr"], returns: "u32" },
     aktorz_result_data: { args: ["ptr"], returns: "ptr" },
@@ -125,7 +125,7 @@ export function loadBunApi(path: string): RawApi {
     runtimeDestroy: (runtime) => void runtimeDestroy(runtime),
     runtimeRegister: (runtime, kind) =>
       normalizePointer(runtimeRegister(runtime, input(kind), BigInt(kind.byteLength))),
-    runtimeRequest: (runtime, kind, key, high, low, payload) =>
+    runtimeRequest: (runtime, kind, key, messageId, payload) =>
       normalizePointer(
         runtimeRequest(
           runtime,
@@ -133,13 +133,13 @@ export function loadBunApi(path: string): RawApi {
           BigInt(kind.byteLength),
           input(key),
           BigInt(key.byteLength),
-          high,
-          low,
+          input(messageId),
+          BigInt(messageId.byteLength),
           input(payload),
           BigInt(payload.byteLength),
         ),
       ),
-    runtimeTell: (runtime, kind, key, high, low, payload) =>
+    runtimeTell: (runtime, kind, key, messageId, payload) =>
       normalizePointer(
         runtimeTell(
           runtime,
@@ -147,8 +147,8 @@ export function loadBunApi(path: string): RawApi {
           BigInt(kind.byteLength),
           input(key),
           BigInt(key.byteLength),
-          high,
-          low,
+          input(messageId),
+          BigInt(messageId.byteLength),
           input(payload),
           BigInt(payload.byteLength),
         ),
@@ -164,7 +164,7 @@ export function loadBunApi(path: string): RawApi {
         ),
       ),
     runtimePassivateIdle: (runtime, ticks) =>
-      normalizePointer(runtimePassivateIdle(runtime, ticks)),
+      normalizePointer(runtimePassivateIdle(runtime, input(ticks), BigInt(ticks.byteLength))),
     runtimeShutdown: (runtime) => normalizePointer(runtimeShutdown(runtime)),
     resultKind: (result) => Number(resultKind(result)),
     resultData: (result) => normalizePointer(resultData(result)),

@@ -27,20 +27,18 @@ export type RawApi = {
     runtime: Pointer,
     kind: Uint8Array,
     key: Uint8Array,
-    messageHigh: bigint,
-    messageLow: bigint,
+    messageId: Uint8Array,
     payload: Uint8Array,
   ): Pointer | null
   runtimeTell(
     runtime: Pointer,
     kind: Uint8Array,
     key: Uint8Array,
-    messageHigh: bigint,
-    messageLow: bigint,
+    messageId: Uint8Array,
     payload: Uint8Array,
   ): Pointer | null
   runtimePassivate(runtime: Pointer, kind: Uint8Array, key: Uint8Array): Pointer | null
-  runtimePassivateIdle(runtime: Pointer, minimumIdleTicks: bigint): Pointer | null
+  runtimePassivateIdle(runtime: Pointer, minimumIdleTicks: Uint8Array): Pointer | null
   runtimeShutdown(runtime: Pointer): Pointer | null
   resultKind(result: Pointer): number
   resultData(result: Pointer): Pointer | null

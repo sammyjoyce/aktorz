@@ -36,16 +36,13 @@ Using `BEGIN IMMEDIATE` asks SQLite for the write lock at transaction start inst
 
 ## Build/link requirements
 
-Consumers using `durable_actor_sqlite` need:
+Adding the module is all a consumer needs:
 
-- `@import("durable_actor_sqlite")`
-- `root_module.link_libc = true`
-- `root_module.linkSystemLibrary("sqlite3", .{})`
+```zig
+exe.root_module.addImport("durable_actor_sqlite", durable_dep.module("durable_actor_sqlite"));
+```
 
-The package build already wires that up for:
-
-- `zig build sqlite-test`
-- `zig build cart-sqlite-gateway`
+The module compiles the SQLite amalgamation fetched by `build.zig.zon` and propagates libc plus the static library to dependents, so no system `sqlite3` is involved.
 
 ## Schema
 

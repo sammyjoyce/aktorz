@@ -1,6 +1,13 @@
 import { copyBytes, encodeDecision, encodeUtf8, toBytes, utf8, writeU64, writeU128 } from "./codec.js"
-import { NativeRuntimeBinding, type NativeDispatch } from "./native.js"
-import type { ActorAddress, ActorDecision, ActorService, BytesLike, RuntimeOptions } from "./types.js"
+import { NativeRuntimeBinding, type NativeDispatch, type NativeRuntimeOptions } from "./native.js"
+import type {
+  ActorAddress,
+  ActorDecision,
+  ActorService,
+  BytesLike,
+  RuntimeOptions,
+  SQLiteRuntimeOptions,
+} from "./types.js"
 
 const MAX_U32 = 0xffff_ffff
 const MAX_U64 = (1n << 64n) - 1n
@@ -183,21 +190,36 @@ class ServiceBridge {
   }
 }
 
-/** A TypeScript façade over the Zig aktorz runtime and its in-memory store. */
+/** A TypeScript façade over the Zig aktorz runtime. */
 export class Runtime {
   readonly #bridge: ServiceBridge
   readonly #native: NativeRuntimeBinding
   #closed = false
 
-  constructor(options: RuntimeOptions = {}) {
-    const snapshotEvery = options.snapshotEvery ?? 128
-    requireU32(snapshotEvery, "snapshotEvery")
-
+  /** Creates an in-memory runtime unless SQLite options are supplied. */
+  constructor(options: RuntimeOptions | SQLiteRuntimeOptions = {}) {
+    requireObject(options, "options")
     this.#bridge = new ServiceBridge()
-    this.#native = new NativeRuntimeBinding(this.#bridge.dispatch, snapshotEvery, options.libraryPath)
+    this.#native = new NativeRuntimeBinding(
+      this.#bridge.dispatch,
+      nativeOptionsFrom(options),
+      options.libraryPath,
+    )
   }
 
+  /** Creates an in-memory runtime. State is lost when the process exits. */
   static memory(options: RuntimeOptions = {}): Runtime {
+    requireObject(options, "options")
+    if (isSQLiteRuntimeOptions(options)) {
+      throw new TypeError("Runtime.memory() does not accept a path; use Runtime.sqlite() for durability")
+    }
+    return new Runtime(options)
+  }
+
+  /** Creates a runtime that persists snapshots, mutations, and replies in SQLite. */
+  static sqlite(options: SQLiteRuntimeOptions): Runtime {
+    requireObject(options, "options")
+    requireString(options.path, "path")
     return new Runtime(options)
   }
 
@@ -302,7 +324,7 @@ function requireSynchronous<T>(value: T, callback: string): T {
 }
 
 function normalizeAddress(address: ActorAddress): ActorAddress {
-  if (address === null || typeof address !== "object") throw new TypeError("address must be an object")
+  requireObject(address, "address")
   requireString(address.kind, "address.kind")
   requireString(address.key, "address.key")
   return address
@@ -316,15 +338,36 @@ function encodeMessageId(messageId: bigint): Uint8Array {
   return writeU128(messageId)
 }
 
-function requireString(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string") throw new TypeError(`${label} must be a string`)
-  if (value.length === 0) throw new RangeError(`${label} must not be empty`)
+function nativeOptionsFrom(options: RuntimeOptions | SQLiteRuntimeOptions): NativeRuntimeOptions {
+  const snapshotEvery = requireU32(options.snapshotEvery ?? 128, "snapshotEvery")
+  if (!isSQLiteRuntimeOptions(options)) return { kind: "memory", snapshotEvery }
+  return {
+    kind: "sqlite",
+    snapshotEvery,
+    path: encodeUtf8(requireString(options.path, "path")),
+    busyTimeoutMs: requireU32(options.busyTimeoutMs ?? 5_000, "busyTimeoutMs"),
+  }
 }
 
-function requireU32(value: number, label: string): void {
+function isSQLiteRuntimeOptions(options: RuntimeOptions | SQLiteRuntimeOptions): options is SQLiteRuntimeOptions {
+  return "path" in options
+}
+
+function requireObject(value: unknown, label: string): asserts value is object {
+  if (value === null || typeof value !== "object") throw new TypeError(`${label} must be an object`)
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new TypeError(`${label} must be a string`)
+  if (value.length === 0) throw new RangeError(`${label} must not be empty`)
+  return value
+}
+
+function requireU32(value: number, label: string): number {
   if (!Number.isInteger(value) || value < 0 || value > MAX_U32) {
     throw new RangeError(`${label} must be an unsigned 32-bit integer`)
   }
+  return value
 }
 
 function requireU64(value: bigint, label: string): void {

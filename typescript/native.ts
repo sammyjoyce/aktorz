@@ -15,7 +15,7 @@ import {
 
 export type { NativeDispatch } from "./native-shared.js"
 
-const ABI_VERSION = 2
+const ABI_VERSION = 3
 
 const ResultKind = {
   ok: 0,
@@ -26,28 +26,48 @@ const ResultKind = {
   error: 255,
 } as const
 
+export type NativeRuntimeOptions =
+  | { readonly kind: "memory"; readonly snapshotEvery: number }
+  | {
+      readonly kind: "sqlite"
+      readonly snapshotEvery: number
+      readonly path: Uint8Array
+      readonly busyTimeoutMs: number
+    }
+
 export class NativeRuntimeBinding {
   readonly #api: RawApi
   readonly #dispatch: RegisteredDispatch
   readonly #handle: Pointer
   #closed = false
 
-  constructor(dispatch: NativeDispatch, snapshotEvery: number, libraryPath?: string) {
-    this.#api = loadRawApi(resolveNativeLibraryPath(libraryPath))
+  constructor(dispatch: NativeDispatch, options: NativeRuntimeOptions, libraryPath?: string) {
+    const api = loadRawApi(resolveNativeLibraryPath(libraryPath))
+    let registered: RegisteredDispatch | undefined
     try {
-      if (this.#api.abiVersion() !== ABI_VERSION) {
+      if (api.abiVersion() !== ABI_VERSION) {
         throw new Error(`Unsupported aktorz native ABI: expected ${ABI_VERSION}`)
       }
 
-      this.#dispatch = this.#api.createDispatch(dispatch)
-      const handle = this.#api.runtimeCreateMemory(this.#dispatch.pointer, 1n, snapshotEvery)
-      if (handle == null) {
-        this.#dispatch.close()
-        throw new Error("Failed to create the native aktorz runtime")
-      }
+      registered = api.createDispatch(dispatch)
+      const handle =
+        options.kind === "memory"
+          ? api.runtimeCreateMemory(registered.pointer, 1n, options.snapshotEvery)
+          : api.runtimeCreateSQLite(
+              registered.pointer,
+              1n,
+              options.snapshotEvery,
+              options.path,
+              options.busyTimeoutMs,
+            )
+      if (handle == null) throwRuntimeCreationError(api, options.kind)
+
+      this.#api = api
+      this.#dispatch = registered
       this.#handle = handle
     } catch (error) {
-      this.#api.close()
+      registered?.close()
+      api.close()
       throw error
     }
   }
@@ -132,25 +152,41 @@ export class NativeRuntimeBinding {
   }
 
   #readResult(resultPointer: Pointer | null, action: string): { kind: number; bytes: Uint8Array } {
-    if (resultPointer == null) {
-      throw new Error(`Native aktorz allocation failed while trying to ${action}`)
-    }
+    return consumeResult(this.#api, resultPointer, action)
+  }
+}
 
-    try {
-      const kind = this.#api.resultKind(resultPointer)
-      const length = toSafeLength(this.#api.resultLength(resultPointer), "native result")
-      const data = this.#api.resultData(resultPointer)
-      const bytes = length === 0 ? EMPTY_BYTES : data == null ? null : this.#api.read(data, length)
-      if (bytes == null) {
-        throw new Error(`Native aktorz returned a null pointer for a ${length}-byte result`)
-      }
-      if (kind === ResultKind.error) {
-        throw new Error(utf8(bytes) || `Native aktorz failed while trying to ${action}`)
-      }
-      return { kind, bytes }
-    } finally {
-      this.#api.resultDestroy(resultPointer)
+// The native side reports a creation failure as an error-kind result, so consuming
+// it throws with the underlying message. A null result means it could not allocate one.
+function throwRuntimeCreationError(api: RawApi, store: NativeRuntimeOptions["kind"]): never {
+  const action = `create the ${store} runtime`
+  consumeResult(api, api.runtimeCreateError(), action)
+  throw new Error(`Native aktorz failed while trying to ${action}`)
+}
+
+function consumeResult(
+  api: RawApi,
+  resultPointer: Pointer | null,
+  action: string,
+): { kind: number; bytes: Uint8Array } {
+  if (resultPointer == null) {
+    throw new Error(`Native aktorz allocation failed while trying to ${action}`)
+  }
+
+  try {
+    const kind = api.resultKind(resultPointer)
+    const length = toSafeLength(api.resultLength(resultPointer), "native result")
+    const data = api.resultData(resultPointer)
+    const bytes = length === 0 ? EMPTY_BYTES : data == null ? null : api.read(data, length)
+    if (bytes == null) {
+      throw new Error(`Native aktorz returned a null pointer for a ${length}-byte result`)
     }
+    if (kind === ResultKind.error) {
+      throw new Error(utf8(bytes) || `Native aktorz failed while trying to ${action}`)
+    }
+    return { kind, bytes }
+  } finally {
+    api.resultDestroy(resultPointer)
   }
 }
 
@@ -171,7 +207,7 @@ function resolveNativeLibraryPath(override?: string): string {
   const path = fileURLToPath(new URL(`../native/${target.key}/${target.file}`, import.meta.url))
   if (!existsSync(path)) {
     throw new Error(
-      `No packaged aktorz native library for ${target.key}. Run \"npm run build:native\" or set AKTORZ_LIBRARY_PATH.`,
+      `No packaged aktorz native library for ${target.key}. Run "npm run build:native" or set AKTORZ_LIBRARY_PATH.`,
     )
   }
   return path
@@ -198,7 +234,7 @@ function detectLinuxLibc(): "gnu" | "musl" {
   if (configured !== undefined && configured !== "") {
     if (configured === "gnu" || configured === "glibc") return "gnu"
     if (configured === "musl") return "musl"
-    throw new Error(`AKTORZ_LIBC must be \"gnu\", \"glibc\", or \"musl\", got ${JSON.stringify(configured)}`)
+    throw new Error(`AKTORZ_LIBC must be "gnu", "glibc", or "musl", got ${JSON.stringify(configured)}`)
   }
 
   const header = process.report?.getReport().header

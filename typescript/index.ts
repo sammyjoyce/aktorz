@@ -6,4 +6,5 @@ export type {
   ActorService,
   BytesLike,
   RuntimeOptions,
+  SQLiteRuntimeOptions,
 } from "./types.js"

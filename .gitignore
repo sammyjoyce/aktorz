@@ -3,3 +3,7 @@ zig-pkg/
 zig-out/
 .direnv/
 result
+node_modules/
+dist/
+native/
+*.tgz

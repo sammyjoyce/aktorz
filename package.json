@@ -1,0 +1,52 @@
+{
+  "name": "aktorz",
+  "version": "0.3.0",
+  "description": "Durable actors for TypeScript, powered by a native Zig runtime",
+  "license": "Apache-2.0",
+  "author": "Sam Joyce",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sammyjoyce/aktorz.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "typescript",
+    "native",
+    "docs/typescript.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run build:typescript && npm run build:native",
+    "build:typescript": "tsc -p tsconfig.json",
+    "build:native": "node scripts/build-native.mjs",
+    "build:native:all": "node scripts/build-native.mjs --all",
+    "test:zig": "zig build test",
+    "test:sqlite": "zig build sqlite-test",
+    "test:typescript-unit": "node test/typescript-unit.mjs",
+    "test:node": "node test/typescript-unit.mjs && node test/typescript-smoke.mjs",
+    "test:bun": "bun test/typescript-unit.mjs && bun test/typescript-smoke.mjs",
+    "test": "npm run test:zig && npm run build && npm run test:node",
+    "prepack": "npm run build:typescript && npm run build:native:all"
+  },
+  "dependencies": {
+    "koffi": "2.16.3"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
+  }
+}

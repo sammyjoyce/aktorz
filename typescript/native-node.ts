@@ -34,6 +34,30 @@ type KoffiModule = {
   view(pointer: Pointer, length: number): ArrayBuffer
 }
 
+// Koffi registers prototypes in a process-global type table, so the dispatch
+// prototype is declared once and reused by every runtime in this process.
+let dispatchPointerTypeCache: KoffiType | undefined
+
+function dispatchPointerTypeFor(koffi: KoffiModule): KoffiType {
+  if (dispatchPointerTypeCache === undefined) {
+    dispatchPointerTypeCache = koffi.pointer(
+      koffi.proto("AktorzDispatch", "int64_t", [
+        "uint64_t",
+        "uint32_t",
+        "uint64_t",
+        "uint64_t",
+        "const uint8_t *",
+        "uint64_t",
+        "const uint8_t *",
+        "uint64_t",
+        "uint8_t *",
+        "uint64_t",
+      ]),
+    )
+  }
+  return dispatchPointerTypeCache
+}
+
 export function loadNodeApi(path: string): RawApi {
   let koffi: KoffiModule
   try {
@@ -44,19 +68,7 @@ export function loadNodeApi(path: string): RawApi {
   }
 
   const library = koffi.load(path)
-  const dispatchType = koffi.proto("AktorzDispatch", "int64_t", [
-    "uint64_t",
-    "uint32_t",
-    "uint64_t",
-    "uint64_t",
-    "const uint8_t *",
-    "uint64_t",
-    "const uint8_t *",
-    "uint64_t",
-    "uint8_t *",
-    "uint64_t",
-  ])
-  const dispatchPointerType = koffi.pointer(dispatchType)
+  const dispatchPointerType = dispatchPointerTypeFor(koffi)
 
   const abiVersion = library.func("aktorz_abi_version", "uint32_t", [])
   const runtimeCreateMemory = library.func("aktorz_runtime_create_memory", "void *", [
@@ -64,6 +76,15 @@ export function loadNodeApi(path: string): RawApi {
     "uint64_t",
     "uint32_t",
   ])
+  const runtimeCreateSQLite = library.func("aktorz_runtime_create_sqlite", "void *", [
+    dispatchPointerType,
+    "uint64_t",
+    "uint32_t",
+    "const uint8_t *",
+    "uint64_t",
+    "uint32_t",
+  ])
+  const runtimeCreateError = library.func("aktorz_runtime_create_error", "void *", [])
   const runtimeDestroy = library.func("aktorz_runtime_destroy", "void", ["void *"])
   const runtimeRegister = library.func("aktorz_runtime_register", "void *", [
     "void *",
@@ -147,6 +168,18 @@ export function loadNodeApi(path: string): RawApi {
     },
     runtimeCreateMemory: (dispatch, context, snapshotEvery) =>
       normalizePointer(runtimeCreateMemory(dispatch, context, snapshotEvery)),
+    runtimeCreateSQLite: (dispatch, context, snapshotEvery, pathBytes, busyTimeoutMs) =>
+      normalizePointer(
+        runtimeCreateSQLite(
+          dispatch,
+          context,
+          snapshotEvery,
+          input(pathBytes),
+          BigInt(pathBytes.byteLength),
+          busyTimeoutMs,
+        ),
+      ),
+    runtimeCreateError: () => normalizePointer(runtimeCreateError()),
     runtimeDestroy: (runtime) => void runtimeDestroy(runtime),
     runtimeRegister: (runtime, kind) =>
       normalizePointer(runtimeRegister(runtime, input(kind), BigInt(kind.byteLength))),

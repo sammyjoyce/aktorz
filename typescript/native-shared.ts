@@ -21,6 +21,14 @@ export type RawApi = {
   abiVersion(): number
   createDispatch(dispatch: NativeDispatch): RegisteredDispatch
   runtimeCreateMemory(dispatch: Pointer, context: bigint, snapshotEvery: number): Pointer | null
+  runtimeCreateSQLite(
+    dispatch: Pointer,
+    context: bigint,
+    snapshotEvery: number,
+    path: Uint8Array,
+    busyTimeoutMs: number,
+  ): Pointer | null
+  runtimeCreateError(): Pointer | null
   runtimeDestroy(runtime: Pointer): void
   runtimeRegister(runtime: Pointer, kind: Uint8Array): Pointer | null
   runtimeRequest(

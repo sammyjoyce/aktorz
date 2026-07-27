@@ -3,7 +3,7 @@
 ## Build & Test (Zig ≥ 0.16.0-dev.2905, Nix flake included)
 - Build: `zig build`
 - All core + example tests: `zig build test`
-- SQLite + benchmark tests: `zig build sqlite-test` (links system `sqlite3` via libc)
+- SQLite + benchmark tests: `zig build sqlite-test` (compiles the bundled SQLite amalgamation)
 - Run a single test file: add it as a test step in `build.zig`; there is no built-in single-test flag.
 - Benchmarks: `zig build bench`
 
@@ -12,7 +12,7 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - `src/core.zig` — core types (`Service` vtable, `Runtime`, `Decision`, `StoreProvider`, `Resolver`, `Forwarder`).
 - `src/durable_actor.zig` — public API module re-exporting core + `MemoryNodeStore` + `TinyGateway`.
 - `src/memory_store.zig` — in-memory `StoreProvider` for tests/demos.
-- `src/sqlite_store.zig` — SQLite-backed store (separate `durable_actor_sqlite` module, links libc+sqlite3).
+- `src/sqlite_store.zig` — SQLite-backed store (separate `durable_actor_sqlite` module; links libc + the bundled SQLite amalgamation).
 - `src/tiny_gateway.zig` — framed TCP gateway (`TinyGateway`, `TcpGateway`).
 - `examples/` — `cart_example`, `bank_example`, TCP gateways, benchmarks.
 
@@ -64,7 +64,7 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
       .hash = "<hash-from-zig-fetch>",
   },
   ```
-- Consumers import modules as: `aktorz.module("durable_actor")` and optionally `aktorz.module("durable_actor_sqlite")` (which requires `link_libc` + `linkSystemLibrary("sqlite3")`).
+- Consumers import modules as: `aktorz.module("durable_actor")` and optionally `aktorz.module("durable_actor_sqlite")`, which links the bundled SQLite amalgamation itself.
 
 ### Runtime Thread Safety
 - `Runtime.request()` is **not proven thread-safe**. Multi-threaded consumers (e.g. a TCP server with thread-per-connection) must serialize all `runtime.request()` / `runtime.passivate()` calls behind a mutex. A CAS spinlock (`std.atomic.Value(u32)` with `cmpxchgWeak`) is the simplest correct approach — coarse-grained but avoids deadlocks.
@@ -103,6 +103,6 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - `std.os.linux.clock_gettime(.REALTIME, &ts)` only works on Linux — returns 0 on other platforms. Consumers needing cross-platform wall-clock time should use `std.posix.gettimeofday()` (works on Linux + macOS) or `std.time.nanoTimestamp()` for monotonic time.
 
 ### PR & CI Workflow
-- This repo has **no GitHub Actions CI**. Rely on local `zig build test` / `zig build sqlite-test` and external bot checks (Mesa, Sentry, Gemini).
+- CI lives in `.github/workflows/ci.yml`: Zig tests, Node on three OSes, Bun bindings, and cross-platform package artifacts. Still run `zig build test` / `zig build sqlite-test` locally first.
 - PR body: write to a temp file (`/tmp/pr-body.md`) and pass `--body-file` to avoid shell escaping issues.
 - Commit messages: use Conventional Commits (`feat(scope)`, `fix(scope)`, `docs(scope)`).

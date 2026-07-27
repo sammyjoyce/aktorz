@@ -1,6 +1,6 @@
 # aktorz
 
-A small Zig package for building lazily activated, single-threaded, stateful services with private durable storage, with native TypeScript bindings for Node.js and Bun. No external Zig dependencies beyond the standard library (SQLite optional).
+A small Zig package for building lazily activated, single-threaded, stateful services with private durable storage, with native TypeScript bindings for Node.js and Bun. The packaged TypeScript native libraries include SQLite and require no external runtime library.
 
 ## How it works
 
@@ -18,9 +18,9 @@ This keeps service logic serialized and retry-safe without locks.
 Requires **Zig 0.16.0-dev.2905** or later. A Nix flake is included:
 
 ```bash
-nix develop          # enter the dev shell
-zig build test       # run core + example + TypeScript ABI tests
-zig build sqlite-test  # run SQLite-backed tests (needs system sqlite3)
+nix develop           # enter the dev shell
+zig build test        # run core + example + TypeScript ABI tests
+zig build sqlite-test # run SQLite-backed tests using the bundled amalgamation
 ```
 
 Try the cart gateway:
@@ -39,7 +39,10 @@ npm install aktorz
 ```ts
 import { Runtime, utf8 } from "aktorz"
 
-const runtime = Runtime.memory({ snapshotEvery: 64 })
+const runtime = Runtime.sqlite({
+  path: ".pi/actors.sqlite3",
+  snapshotEvery: 64,
+})
 
 runtime.register("counter", {
   create: () => ({ value: 0 }),
@@ -61,7 +64,7 @@ console.log(reply && utf8(reply))
 runtime.close()
 ```
 
-The package loads a Zig shared library through Koffi on Node.js or `bun:ffi` on Bun. Build the host artifact from a checkout with `npm run build`; cross-build the complete package matrix with `npm run build:native:all`. See [`docs/typescript.md`](docs/typescript.md) for the callback contract, supported targets, ABI ownership, and packaging details.
+Use `Runtime.memory()` for tests and ephemeral state. `Runtime.sqlite()` uses the same actor API while persisting snapshots, mutations, deduplication records, and replies across close/reopen cycles. The package loads a self-contained Zig shared library through Koffi on Node.js or `bun:ffi` on Bun. Build the host artifact from a checkout with `npm run build`; cross-build the complete package matrix with `npm run build:native:all`. See [`docs/typescript.md`](docs/typescript.md) for the callback contract, SQLite options, ABI ownership, and packaging details.
 
 ## Add to your Zig project
 
@@ -84,9 +87,9 @@ For SQLite persistence, also add:
 
 ```zig
 exe.root_module.addImport("durable_actor_sqlite", durable_dep.module("durable_actor_sqlite"));
-exe.root_module.link_libc = true;
-exe.root_module.linkSystemLibrary("sqlite3", .{});
 ```
+
+The module bundles the SQLite amalgamation and links it for you; no system `sqlite3` is required.
 
 ## Define a service
 
@@ -176,10 +179,10 @@ Bank account commands: `deposit|<cents>|<memo>`, `withdraw|<cents>|<memo>`, `set
 ```bash
 zig build test           # core + example + TypeScript ABI tests
 zig build sqlite-test    # SQLite + benchmark tests
-zig build typescript-native -Doptimize=ReleaseFast  # native TypeScript library
+zig build typescript-native -Doptimize=ReleaseFast  # self-contained native TypeScript library
 npm run build            # TypeScript + current-host native artifact
-npm run test:node        # Node.js integration smoke test
-npm run test:bun         # Bun integration smoke test
+npm run test:node        # Node.js memory + SQLite integration tests
+npm run test:bun         # Bun memory + SQLite integration tests
 zig build -Doptimize=ReleaseFast bench                   # default SQLite suite
 zig build -Doptimize=ReleaseFast bench -- --mode micro --scenario memory_hot --ops 1000000
 ```
@@ -220,9 +223,10 @@ Key flags:
 - Call `shutdown()` before `deinit()` to snapshot and passivate active services cleanly. `deinit()` only releases memory.
 - `actor_seen_message` is retained so old retries are still recognized as duplicates. Idempotency history grows unless you choose a retention policy.
 - TypeScript actor callbacks are synchronous by design; promises are not supported inside a native request.
+- `Runtime.close()` performs the native shutdown before releasing the store and FFI resources.
 
 ## Further reading
 
-- [`docs/typescript.md`](docs/typescript.md) — TypeScript API, native ABI, and packaging
+- [`docs/typescript.md`](docs/typescript.md) — TypeScript API, SQLite runtime, native ABI, and packaging
 - [`docs/sqlite_store.md`](docs/sqlite_store.md) — SQLite store design
 - [`docs/sqlite_schema.sql`](docs/sqlite_schema.sql) — SQLite schema

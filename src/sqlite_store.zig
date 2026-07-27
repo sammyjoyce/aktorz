@@ -486,6 +486,9 @@ fn sqliteError(rc: c_int) anyerror {
     return switch (primaryCode(rc)) {
         c.SQLITE_BUSY => error.SQLiteBusy,
         c.SQLITE_LOCKED => error.SQLiteLocked,
+        c.SQLITE_CANTOPEN => error.SQLiteCantOpen,
+        c.SQLITE_PERM => error.SQLitePermission,
+        c.SQLITE_NOTADB => error.SQLiteNotADatabase,
         c.SQLITE_READONLY => error.SQLiteReadOnly,
         c.SQLITE_CONSTRAINT => error.SQLiteConstraint,
         c.SQLITE_IOERR => error.SQLiteIo,

@@ -39,8 +39,9 @@
     "test:sqlite": "zig build sqlite-test",
     "test:typescript-unit": "node test/typescript-unit.mjs",
     "test:typescript-sqlite": "node test/typescript-sqlite.mjs",
-    "test:node": "node test/typescript-unit.mjs && node test/typescript-smoke.mjs && node test/typescript-sqlite.mjs",
-    "test:bun": "bun test/typescript-unit.mjs && bun test/typescript-smoke.mjs && bun test/typescript-sqlite.mjs",
+    "test:typescript-durability": "node test/typescript-durability.mjs",
+    "test:node": "node test/typescript-unit.mjs && node test/typescript-smoke.mjs && node test/typescript-sqlite.mjs && node test/typescript-durability.mjs",
+    "test:bun": "bun test/typescript-unit.mjs && bun test/typescript-smoke.mjs && bun test/typescript-sqlite.mjs && bun test/typescript-durability.mjs",
     "test": "npm run test:zig && npm run test:sqlite && npm run build && npm run test:node",
     "prepack": "npm run build:typescript && npm run build:native:all"
   },

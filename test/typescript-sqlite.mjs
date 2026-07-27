@@ -64,7 +64,13 @@ try {
     "native SQLite creation errors are surfaced to TypeScript",
   )
   assert.throws(() => Runtime.sqlite({}), /path must be a string/)
+  assert.throws(() => Runtime.sqlite({ path: 5 }), /path must be a string/)
   assert.throws(() => Runtime.sqlite({ path: "" }), /path must not be empty/)
+  assert.throws(
+    () => new Runtime({ path: 5 }),
+    /path must be a string/,
+    "a non-string path is rejected by the constructor, not just the sqlite() factory",
+  )
   assert.throws(
     () => Runtime.memory({ path: database }),
     /use Runtime\.sqlite/,

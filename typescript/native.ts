@@ -60,7 +60,7 @@ export class NativeRuntimeBinding {
               options.path,
               options.busyTimeoutMs,
             )
-      if (handle == null) throw runtimeCreationError(api, options.kind)
+      if (handle == null) throwRuntimeCreationError(api, options.kind)
 
       this.#api = api
       this.#dispatch = registered
@@ -156,17 +156,12 @@ export class NativeRuntimeBinding {
   }
 }
 
-function runtimeCreationError(api: RawApi, store: NativeRuntimeOptions["kind"]): Error {
-  const fallback = `Failed to create the native aktorz ${store} runtime`
-  const result = api.runtimeCreateError()
-  if (result == null) return new Error(fallback)
-  try {
-    const length = toSafeLength(api.resultLength(result), "native result")
-    const data = length === 0 ? null : api.resultData(result)
-    return new Error(data == null ? fallback : utf8(api.read(data, length)) || fallback)
-  } finally {
-    api.resultDestroy(result)
-  }
+// The native side reports a creation failure as an error-kind result, so consuming
+// it throws with the underlying message. A null result means it could not allocate one.
+function throwRuntimeCreationError(api: RawApi, store: NativeRuntimeOptions["kind"]): never {
+  const action = `create the ${store} runtime`
+  consumeResult(api, api.runtimeCreateError(), action)
+  throw new Error(`Native aktorz failed while trying to ${action}`)
 }
 
 function consumeResult(

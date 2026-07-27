@@ -350,7 +350,7 @@ function nativeOptionsFrom(options: RuntimeOptions | SQLiteRuntimeOptions): Nati
 }
 
 function isSQLiteRuntimeOptions(options: RuntimeOptions | SQLiteRuntimeOptions): options is SQLiteRuntimeOptions {
-  return (options as SQLiteRuntimeOptions).path !== undefined
+  return "path" in options
 }
 
 function requireObject(value: unknown, label: string): asserts value is object {

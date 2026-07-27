@@ -1,0 +1,25 @@
+name: Cleanup connector probes
+
+on:
+  push:
+    branches:
+      - agent/sqlite-runtime-scratch
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close connector probe issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate repos/${{ github.repository }}/issues -f state=open -f per_page=100 \
+            --jq '.[] | select((.title == "DO NOT CREATE" or .title == "IGNORE THIS TOOL CALL") and (.pull_request | not)) | .number' \
+            | while read -r issue; do
+                gh api --method PATCH repos/${{ github.repository }}/issues/$issue \
+                  -f state=closed -f state_reason=not_planned >/dev/null
+              done

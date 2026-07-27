@@ -22,14 +22,17 @@ pub fn build(b: *std.Build) void {
     });
     sqlite_module.addImport("durable_actor", durable_module);
 
+    const typescript_module = b.createModule(.{
+        .root_source_file = b.path("src/typescript/ffi.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    typescript_module.addImport("durable_actor", durable_module);
+
     const typescript_library = b.addLibrary(.{
         .name = "aktorz",
         .linkage = .dynamic,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/typescript/ffi.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = typescript_module,
     });
     const install_typescript_library = b.addInstallArtifact(typescript_library, .{});
     const typescript_step = b.step("typescript-native", "Build the native TypeScript FFI library");
@@ -47,13 +50,13 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests (core + examples + TypeScript ABI)");
     test_step.dependOn(&run_unit_tests.step);
 
-    const typescript_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/typescript/ffi.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    const typescript_test_module = b.createModule(.{
+        .root_source_file = b.path("src/typescript/ffi.zig"),
+        .target = target,
+        .optimize = optimize,
     });
+    typescript_test_module.addImport("durable_actor", durable_module);
+    const typescript_tests = b.addTest(.{ .root_module = typescript_test_module });
     test_step.dependOn(&b.addRunArtifact(typescript_tests).step);
 
     const cart_example_tests = b.addTest(.{

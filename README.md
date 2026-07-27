@@ -40,7 +40,7 @@ npm install aktorz
 import { Runtime, utf8 } from "aktorz"
 
 const runtime = Runtime.sqlite({
-  path: ".pi/actors.sqlite3",
+  path: "actors.sqlite3",
   snapshotEvery: 64,
 })
 

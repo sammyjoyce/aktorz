@@ -209,6 +209,10 @@ export class Runtime {
 
   /** Creates an in-memory runtime. State is lost when the process exits. */
   static memory(options: RuntimeOptions = {}): Runtime {
+    requireObject(options, "options")
+    if (isSQLiteRuntimeOptions(options)) {
+      throw new TypeError("Runtime.memory() does not accept a path; use Runtime.sqlite() for durability")
+    }
     return new Runtime(options)
   }
 

@@ -73,7 +73,7 @@ Use the same actor service with a durable local store:
 
 ```ts
 const runtime = Runtime.sqlite({
-  path: ".pi/actors.sqlite3",
+  path: "actors.sqlite3",
   snapshotEvery: 64,
   busyTimeoutMs: 5_000,
 })

@@ -66,6 +66,11 @@ try {
   assert.throws(() => Runtime.sqlite({}), /path must be a string/)
   assert.throws(() => Runtime.sqlite({ path: "" }), /path must not be empty/)
   assert.throws(
+    () => Runtime.memory({ path: database }),
+    /use Runtime\.sqlite/,
+    "a path passed to Runtime.memory() is rejected instead of silently creating a SQLite store",
+  )
+  assert.throws(
     () => Runtime.sqlite({ path: `${database}\u0000extra` }),
     /SQLitePathContainsNul/,
     "embedded NUL bytes are rejected instead of silently truncating the path",

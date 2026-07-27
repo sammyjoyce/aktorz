@@ -3,7 +3,7 @@ const core = @import("../core.zig");
 const memory = @import("../memory_store.zig");
 
 const Allocator = std.mem.Allocator;
-const ABI_VERSION: u32 = 1;
+const ABI_VERSION: u32 = 2;
 const page_allocator = std.heap.page_allocator;
 
 const Operation = enum(u32) {
@@ -214,10 +214,16 @@ const BridgeService = struct {
         defer response.deinit();
         if (response.bytes.len != @sizeOf(u64)) return error.InvalidTypeScriptServiceId;
 
-        const service = try alloc.create(BridgeService);
+        const service_id = readU64(response.bytes, 0);
+        const service = alloc.create(BridgeService) catch |err| {
+            if (bridge.call(.destroy, service_id, &.{}, &.{})) |cleanup| {
+                cleanup.deinit();
+            } else |_| {}
+            return err;
+        };
         service.* = .{
             .bridge = bridge,
-            .service_id = readU64(response.bytes, 0),
+            .service_id = service_id,
         };
         return service;
     }
@@ -313,8 +319,8 @@ pub export fn aktorz_runtime_request(
     kind_len: u64,
     key_ptr: ?[*]const u8,
     key_len: u64,
-    message_id_high: u64,
-    message_id_low: u64,
+    message_id_ptr: ?[*]const u8,
+    message_id_len: u64,
     payload_ptr: ?[*]const u8,
     payload_len: u64,
 ) ?*NativeResult {
@@ -322,6 +328,8 @@ pub export fn aktorz_runtime_request(
     runtime_handle.bridge.clearLastError();
     const kind = inputSlice(kind_ptr, kind_len) catch |err| return resultFromError(runtime_handle, err);
     const key = inputSlice(key_ptr, key_len) catch |err| return resultFromError(runtime_handle, err);
+    const message_id_bytes = inputSlice(message_id_ptr, message_id_len) catch |err| return resultFromError(runtime_handle, err);
+    const message_id = decodeMessageId(message_id_bytes) catch |err| return resultFromError(runtime_handle, err);
     const payload = inputSlice(payload_ptr, payload_len) catch |err| return resultFromError(runtime_handle, err);
 
     const previous_bridge = active_bridge;
@@ -330,7 +338,7 @@ pub export fn aktorz_runtime_request(
 
     const reply = runtime_handle.runtime.request(
         .{ .kind = kind, .key = key },
-        joinMessageId(message_id_high, message_id_low),
+        message_id,
         payload,
     ) catch |err| return resultFromError(runtime_handle, err);
 
@@ -347,8 +355,8 @@ pub export fn aktorz_runtime_tell(
     kind_len: u64,
     key_ptr: ?[*]const u8,
     key_len: u64,
-    message_id_high: u64,
-    message_id_low: u64,
+    message_id_ptr: ?[*]const u8,
+    message_id_len: u64,
     payload_ptr: ?[*]const u8,
     payload_len: u64,
 ) ?*NativeResult {
@@ -356,6 +364,8 @@ pub export fn aktorz_runtime_tell(
     runtime_handle.bridge.clearLastError();
     const kind = inputSlice(kind_ptr, kind_len) catch |err| return resultFromError(runtime_handle, err);
     const key = inputSlice(key_ptr, key_len) catch |err| return resultFromError(runtime_handle, err);
+    const message_id_bytes = inputSlice(message_id_ptr, message_id_len) catch |err| return resultFromError(runtime_handle, err);
+    const message_id = decodeMessageId(message_id_bytes) catch |err| return resultFromError(runtime_handle, err);
     const payload = inputSlice(payload_ptr, payload_len) catch |err| return resultFromError(runtime_handle, err);
 
     const previous_bridge = active_bridge;
@@ -364,7 +374,7 @@ pub export fn aktorz_runtime_tell(
 
     runtime_handle.runtime.tell(
         .{ .kind = kind, .key = key },
-        joinMessageId(message_id_high, message_id_low),
+        message_id,
         payload,
     ) catch |err| return resultFromError(runtime_handle, err);
     return result(.ok, &.{});
@@ -394,10 +404,17 @@ pub export fn aktorz_runtime_passivate(
 
 pub export fn aktorz_runtime_passivate_idle(
     handle: ?*RuntimeHandle,
-    minimum_idle_ticks: u64,
+    minimum_idle_ticks_ptr: ?[*]const u8,
+    minimum_idle_ticks_len: u64,
 ) ?*NativeResult {
     const runtime_handle = handle orelse return null;
     runtime_handle.bridge.clearLastError();
+    const minimum_idle_ticks_bytes = inputSlice(minimum_idle_ticks_ptr, minimum_idle_ticks_len) catch |err| {
+        return resultFromError(runtime_handle, err);
+    };
+    const minimum_idle_ticks = decodeU64(minimum_idle_ticks_bytes) catch |err| {
+        return resultFromError(runtime_handle, err);
+    };
 
     const previous_bridge = active_bridge;
     active_bridge = &runtime_handle.bridge;
@@ -467,6 +484,16 @@ fn joinMessageId(high: u64, low: u64) u128 {
     return (@as(u128, high) << 64) | @as(u128, low);
 }
 
+fn decodeMessageId(bytes: []const u8) !u128 {
+    if (bytes.len != @sizeOf(u128)) return error.InvalidMessageIdLength;
+    return joinMessageId(readU64(bytes, 8), readU64(bytes, 0));
+}
+
+fn decodeU64(bytes: []const u8) !u64 {
+    if (bytes.len != @sizeOf(u64)) return error.InvalidU64Length;
+    return readU64(bytes, 0);
+}
+
 fn readU64(bytes: []const u8, offset: usize) u64 {
     return std.mem.readInt(u64, bytes[offset..][0..8], .little);
 }
@@ -501,9 +528,13 @@ fn decodeDecision(alloc: Allocator, bytes: []const u8) !core.Decision {
 }
 
 test "message identifiers retain all 128 bits" {
+    const bytes = [_]u8{
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe,
+        0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01,
+    };
     try std.testing.expectEqual(
         @as(u128, 0x0123456789abcdef_fedcba9876543210),
-        joinMessageId(0x0123456789abcdef, 0xfedcba9876543210),
+        try decodeMessageId(&bytes),
     );
 }
 

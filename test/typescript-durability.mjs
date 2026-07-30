@@ -118,6 +118,36 @@ try {
 
   runtime.shutdown()
   runtime.close()
+
+  // Step 10: WAL compaction must not outrun the durable snapshot.
+  // Two runtimes may hold the same actor over one database. Compaction deletes
+  // WAL entries below the snapshot sequence, so a runtime that compacted after
+  // writing a snapshot the other runtime had already superseded would delete
+  // the entries needed to recover the newer state -- losing committed writes
+  // while every append still reported success.
+  {
+    // A dedicated actor, so the count is exactly what this step wrote.
+    const shared = { kind: "ledger", key: "acct-concurrent" }
+    const writers = [open({ snapshotEvery: 1 }), open({ snapshotEvery: 1 }), open({ snapshotEvery: 1 })]
+    for (const [index, writer] of writers.entries()) {
+      writer.request(shared, 0x900n + BigInt(index), JSON.stringify({ id: `w-${index}`, amount: 10 }))
+    }
+    for (const writer of writers) {
+      writer.passivate(shared)
+      writer.shutdown()
+      writer.close()
+    }
+
+    const reader = open()
+    const state = JSON.parse(utf8(reader.request(shared, 0x950n, JSON.stringify({ id: "read", amount: 0 }))))
+    assert.equal(
+      state.applied,
+      writers.length + 1,
+      `every committed append survives concurrent snapshots (applied=${state.applied})`,
+    )
+    reader.shutdown()
+    reader.close()
+  }
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

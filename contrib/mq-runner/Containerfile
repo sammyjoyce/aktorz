@@ -1,0 +1,34 @@
+# Merge-check runner image for the mq merge queue.
+# Contains Zig 0.16.0 and the pre-fetched build.zig.zon dependency packages so
+# the test contract runs with --network=none inside mq-podman-runner.
+#
+# Build:  podman build -t localhost/aktorz-merge-check -f contrib/mq-runner/Containerfile .
+# Deps are resolved offline via:  zig build ... --system /opt/zig-packages/p
+
+FROM docker.io/library/debian:trixie-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG ZIG_VERSION=0.16.0
+RUN curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+        | tar -xJ -C /opt \
+    && ln -s "/opt/zig-x86_64-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig
+
+# Pre-fetch the exact dependency packages named by build.zig.zon into a
+# read-only package directory used with `zig build --system`.
+COPY build.zig.zon /tmp/prefetch/build.zig.zon
+RUN cd /tmp/prefetch \
+    && touch build.zig \
+    && mkdir -p /opt/zig-packages/tmp \
+    && ZIG_GLOBAL_CACHE_DIR=/opt/zig-packages zig fetch 'https://github.com/rockorager/ziglint/archive/80d2b08a7eb4aa9c96e2b2183716b347dcacb64b.tar.gz' \
+    && ZIG_GLOBAL_CACHE_DIR=/opt/zig-packages zig fetch 'https://sqlite.org/2026/sqlite-amalgamation-3530200.zip' \
+    && rm -rf /tmp/prefetch
+
+# Zig needs a writable+executable global cache (it spawns helpers such as
+# translate-c from it), so the runner's noexec /tmp tmpfs cannot hold it.
+# Use the workspace, which is gitignored as .zig-global/ so the contract's
+# clean-worktree assertion still passes. Seed it before building:
+#   cp -a /opt/zig-packages /workspace/.zig-global
+ENV ZIG_GLOBAL_CACHE_DIR=/workspace/.zig-global

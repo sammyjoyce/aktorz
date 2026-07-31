@@ -230,3 +230,5 @@ Key flags:
 - [`docs/typescript.md`](docs/typescript.md) — TypeScript API, SQLite runtime, native ABI, and packaging
 - [`docs/sqlite_store.md`](docs/sqlite_store.md) — SQLite store design
 - [`docs/sqlite_schema.sql`](docs/sqlite_schema.sql) — SQLite schema
+
+<!-- mq acceptance -->

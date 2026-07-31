@@ -232,3 +232,5 @@ Key flags:
 - [`docs/sqlite_schema.sql`](docs/sqlite_schema.sql) — SQLite schema
 
 <!-- mq acceptance -->
+
+<!-- merge-queue services e2e -->

@@ -7,11 +7,15 @@ A small Zig package for building lazily activated, single-threaded, stateful ser
 A `Service` is a user-defined state machine. The `Runtime` activates it on demand, replays its durable log, and then feeds it messages one at a time:
 
 1. `decide()` inspects the current state and message, returning a `Decision` (an optional mutation + optional reply).
-2. The mutation is persisted via `appendOnce()` — deduplicated by message ID.
-3. Only after the append succeeds does the runtime call `apply()` to update in-memory state.
+2. If the decision contains a mutation, `appendOnce()` records it once for that actor and message ID, together with the optional reply.
+3. Only after a new append succeeds does the runtime call `apply()` to update in-memory state.
 4. Snapshots are taken periodically and on passivation, compacting the log.
 
-This keeps service logic serialized and retry-safe without locks.
+This serializes actor state changes without locks and suppresses duplicate mutation appends for retained message IDs.
+
+### Deduplication semantics
+
+Aktorz provides per-actor mutating-decision deduplication with stored-reply return. `decide()` still runs on every request attempt; a repeated message ID returns the first stored reply only when the current attempt also produces a mutation, and decisions without mutations are neither looked up nor recorded (so they may observe newer state). This is not exactly-once request execution. See [`docs/deduplication.md`](docs/deduplication.md) for message-ID scope, lifecycle, retention, and conflicting-payload behavior.
 
 ## Quick start
 
@@ -64,7 +68,7 @@ console.log(reply && utf8(reply))
 runtime.close()
 ```
 
-Use `Runtime.memory()` for tests and ephemeral state. `Runtime.sqlite()` uses the same actor API while persisting snapshots, mutations, deduplication records, and replies across close/reopen cycles. The package loads a self-contained Zig shared library through Koffi on Node.js or `bun:ffi` on Bun. Build the host artifact from a checkout with `npm run build`; cross-build the complete package matrix with `npm run build:native:all`. See [`docs/typescript.md`](docs/typescript.md) for the callback contract, SQLite options, ABI ownership, and packaging details.
+Use `Runtime.memory()` for tests and ephemeral state. `Runtime.sqlite()` uses the same actor API while persisting snapshots, mutation-log entries, and the per-actor deduplication records and optional replies created by mutating decisions across close/reopen cycles. The package loads a self-contained Zig shared library through Koffi on Node.js or `bun:ffi` on Bun. Build the host artifact from a checkout with `npm run build`; cross-build the complete package matrix with `npm run build:native:all`. See [`docs/typescript.md`](docs/typescript.md) for the callback contract, SQLite options, ABI ownership, and packaging details.
 
 ## Add to your Zig project
 
@@ -221,12 +225,12 @@ Key flags:
 ## Notes
 
 - Call `shutdown()` before `deinit()` to snapshot and passivate active services cleanly. `deinit()` only releases memory.
-- `actor_seen_message` is retained so old retries are still recognized as duplicates. Idempotency history grows unless you choose a retention policy.
 - TypeScript actor callbacks are synchronous by design; promises are not supported inside a native request.
 - `Runtime.close()` performs the native shutdown before releasing the store and FFI resources.
 
 ## Further reading
 
+- [`docs/deduplication.md`](docs/deduplication.md) — exact message-ID deduplication boundary, stored replies, and retention
 - [`docs/typescript.md`](docs/typescript.md) — TypeScript API, SQLite runtime, native ABI, and packaging
 - [`docs/sqlite_store.md`](docs/sqlite_store.md) — SQLite store design
 - [`docs/sqlite_schema.sql`](docs/sqlite_schema.sql) — SQLite schema

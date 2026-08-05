@@ -119,7 +119,64 @@ try {
   runtime.shutdown()
   runtime.close()
 
-  // Step 10: WAL compaction must not outrun the durable snapshot.
+  // Step 10: post-append apply() failure contract (docs/deduplication.md).
+  // The mutation and reply are committed before apply() runs. A throwing
+  // apply() surfaces its own message (a throwing destroy() during discard
+  // must not replace it — first error wins), the actor instance is discarded
+  // without snapshotting, and the same-ID retry recovers from the durable
+  // log and returns the stored reply without applying the mutation twice.
+  {
+    const flaky = { kind: "flaky", key: "acct-flaky" }
+    let applyFailures = 1
+    let destroyCalls = 0
+    const registerFlaky = (target) => {
+      target.register("flaky", {
+        create: () => ({ total: 0 }),
+        loadSnapshot(state, snapshot) {
+          state.total = Number(utf8(snapshot))
+        },
+        makeSnapshot: (state) => String(state.total),
+        decide(state, message) {
+          const amount = Number(utf8(message))
+          return { mutation: String(amount), reply: String(state.total + amount) }
+        },
+        apply(state, mutation) {
+          if (applyFailures > 0) {
+            applyFailures -= 1
+            throw new Error("boom")
+          }
+          state.total += Number(utf8(mutation))
+        },
+        destroy() {
+          destroyCalls += 1
+          throw new Error("cleanup-failed")
+        },
+      })
+    }
+
+    const target = open()
+    registerFlaky(target)
+    assert.throws(
+      () => target.request(flaky, 0x1000n, "25"),
+      (error) => error.message === "boom",
+      "the original apply() message survives a throwing destroy() during discard",
+    )
+    assert.equal(destroyCalls, 1, "the failed activation was discarded without snapshotting")
+    assert.equal(
+      utf8(target.request(flaky, 0x1000n, "25")),
+      "25",
+      "the same-ID retry recovers from the durable log and returns the stored reply",
+    )
+    assert.equal(
+      utf8(target.request(flaky, 0x1001n, "0")),
+      "25",
+      "the committed mutation was applied exactly once",
+    )
+    target.shutdown()
+    target.close()
+  }
+
+  // Step 11: WAL compaction must not outrun the durable snapshot.
   // Two runtimes may hold the same actor over one database. Compaction deletes
   // WAL entries below the snapshot sequence, so a runtime that compacted after
   // writing a snapshot the other runtime had already superseded would delete

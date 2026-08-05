@@ -50,10 +50,9 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - README should be a **landing page** (navigational), not a reference dump. Route readers to examples, docs, and API instead of mixing tutorial/reference/explanation.
 - AGENTS.md stays concise (~30 lines core); use subdirectory AGENTS.md for subsystem-specific guidance.
 
-### Known API Gap: MemoryNodeStore Phantom Objects
-- `MemoryNodeStore.openScoped` calls `getOrCreateObject`, which materializes an empty entry even for non-existent actors. This means `StoreProvider.open().loadSnapshot()` is **not safe as an existence probe** — it will succeed (with no snapshot) and silently create the object.
-- Downstream consumers (e.g. DTW) had to work around this with an explicit `ObjectStateProbe` that checks `snapshot != null or wal.items.len > 0` (memory) or queries `actor_snapshot UNION actor_wal` (SQLite).
-- If adding an existence-check API to aktorz, it should be on `StoreProvider` or `ScopedStore`, not require consumers to reach into store internals.
+### Actor Existence Checks: Use StoreProvider.probeObject
+- `MemoryNodeStore.openScoped` calls `getOrCreateObject`, which materializes an empty entry even for non-existent actors. `StoreProvider.open().loadSnapshot()` is therefore **not safe as an existence probe** — it will succeed (with no snapshot) and silently create the object.
+- Use `StoreProvider.probeObject(object_id)` instead: it never materializes state, reports presence when durable state or retry history exists (memory + SQLite implement it), and returns `error.ObjectProbeUnsupported` for providers without `probe_fn`.
 
 ### Downstream Dependency Integration (Zig Package)
 - `zig fetch --save` in Zig 0.16-dev incorrectly writes `.path = <tarball_url>` instead of `.url`/`.hash` for remote URLs. Always verify `build.zig.zon` manually after running `zig fetch --save`.
@@ -86,6 +85,13 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 ### Zig 0.16 Time and Formatting
 - No high-level timestamp API in stdlib — use `std.os.linux.clock_gettime(.REALTIME, &ts)` for wall-clock time.
 - Epoch → ISO 8601 formatting requires a custom `formatEpochISO8601` using `std.time.epoch` (no stdlib formatter exists).
+
+### Deduplication Boundary (never overclaim)
+- Deduplication is per actor and only reached for decisions with a mutation: retries re-run `decide()`, reply-only decisions are not recorded, and a retry whose new decision has no mutation bypasses the ledger. Docs must never describe this as generic or exactly-once request execution. Reference: `docs/deduplication.md`.
+
+### Post-Append apply() Failure Contract
+- `apply()` must be deterministic, replay-safe, state-only, and effectively infallible for compatible persisted mutations. If it fails after `appendOnce()` committed, the runtime discards the activation without snapshotting and returns `error.PostAppendApplyFailed` — retry the **same** message id. If recovery (snapshot decode or replay apply) fails deterministically, requests return `error.PoisonedActor` until `Runtime.retryPoisoned()` or restart; poison is process-local.
+- A snapshot failure after a successful apply is a committed-command maintenance error: the activation stays mapped and usable; never treat it as state divergence.
 
 ### Reply Ownership and Cleanup
 - `Runtime.request()` returns `?OwnedBytes`. The caller **owns** the reply and must call `reply.deinit()` — use `defer reply.deinit()` immediately after the null check. Forgetting this leaks the reply's backing allocation.

@@ -88,6 +88,12 @@ const sql_count_actor_seen_message =
 
 const sql_pragma_wal_autocheckpoint =
     "PRAGMA wal_autocheckpoint;";
+
+const sql_probe_object =
+    "SELECT 1 " ++
+    "WHERE EXISTS (SELECT 1 FROM actor_snapshot WHERE object_id = ?1) " ++
+    "OR EXISTS (SELECT 1 FROM actor_wal WHERE object_id = ?1) " ++
+    "OR EXISTS (SELECT 1 FROM actor_seen_message WHERE object_id = ?1)";
 pub const SQLiteNodeStore = struct {
     alloc: Allocator,
     db: *c.sqlite3,
@@ -179,12 +185,29 @@ pub const SQLiteNodeStore = struct {
         return .{
             .ptr = self,
             .open_fn = openErased,
+            .probe_fn = probeErased,
         };
     }
 
     fn openErased(ctx: *anyopaque, alloc: Allocator, object_id: []const u8) anyerror!core.ScopedStore {
         const self: *SQLiteNodeStore = @ptrCast(@alignCast(ctx));
         return try self.openScoped(alloc, object_id);
+    }
+
+    /// Reports presence by checking all three durable tables: an actor is
+    /// present when it has a snapshot, mutation-log rows, or deduplication
+    /// history. Never creates rows.
+    fn probeErased(ctx: *anyopaque, object_id: []const u8) anyerror!bool {
+        const self: *SQLiteNodeStore = @ptrCast(@alignCast(ctx));
+        var stmt = try Statement.init(self.db, sql_probe_object);
+        defer stmt.deinit();
+
+        try bindText(stmt.ptr, 1, object_id);
+
+        return switch (try stmt.step()) {
+            .row => true,
+            .done => false,
+        };
     }
 
     fn openScoped(self: *SQLiteNodeStore, alloc: Allocator, object_id: []const u8) !core.ScopedStore {
@@ -632,6 +655,231 @@ test "sqlite store snapshots on shutdown and reopens from durable state" {
         defer view.deinit();
         try std.testing.expectEqualStrings("persisted-value", view.bytes);
     }
+}
+
+/// Control block for the non-idempotent counter fixture below. SQLite tests
+/// run sequentially in one binary; reset at the start of each test.
+const CounterControl = struct {
+    fail_apply_remaining: u32 = 0,
+};
+
+var counter_control: CounterControl = .{};
+
+/// Non-idempotent fixture: `inc` replies with the pre-computed post-increment
+/// value, so a re-applied duplicate or a recomputed retry reply is observable.
+/// (The constant-reply KvService above cannot detect either failure mode.)
+const CounterService = struct {
+    alloc: Allocator,
+    value: u64 = 0,
+
+    pub fn create(alloc: Allocator, address: core.Address) !*CounterService {
+        _ = address;
+        const self = try alloc.create(CounterService);
+        self.* = .{ .alloc = alloc };
+        return self;
+    }
+
+    pub fn destroy(self: *CounterService, alloc: Allocator) void {
+        alloc.destroy(self);
+    }
+
+    pub fn loadSnapshot(self: *CounterService, bytes: []const u8) !void {
+        self.value = try std.fmt.parseInt(u64, bytes, 10);
+    }
+
+    pub fn makeSnapshot(self: *CounterService, alloc: Allocator) !core.OwnedBytes {
+        const bytes = try std.fmt.allocPrint(alloc, "{d}", .{self.value});
+        return core.OwnedBytes.fromOwned(alloc, bytes);
+    }
+
+    pub fn decide(self: *CounterService, alloc: Allocator, message: []const u8) !core.Decision {
+        if (std.mem.eql(u8, message, "get")) {
+            const bytes = try std.fmt.allocPrint(alloc, "{d}", .{self.value});
+            return .{ .reply = core.OwnedBytes.fromOwned(alloc, bytes) };
+        }
+        if (std.mem.eql(u8, message, "inc")) {
+            const bytes = try std.fmt.allocPrint(alloc, "{d}", .{self.value + 1});
+            return .{
+                .mutation = try core.OwnedBytes.clone(alloc, "inc"),
+                .reply = core.OwnedBytes.fromOwned(alloc, bytes),
+            };
+        }
+        return error.InvalidCommand;
+    }
+
+    pub fn apply(self: *CounterService, mutation: []const u8) !void {
+        if (counter_control.fail_apply_remaining > 0) {
+            counter_control.fail_apply_remaining -= 1;
+            return error.ApplyFailed;
+        }
+        if (!std.mem.eql(u8, mutation, "inc")) return error.UnknownMutation;
+        self.value += 1;
+    }
+};
+
+fn tmpSQLitePath(alloc: Allocator, tmp: *std.testing.TmpDir, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}/{s}", .{ tmp.sub_path, name });
+}
+
+test "sqlite duplicate retry returns stored reply after runtime and store restart" {
+    counter_control = .{};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try tmpSQLitePath(std.testing.allocator, &tmp, "restart-retry.sqlite3");
+    defer std.testing.allocator.free(path);
+
+    const addr = core.Address{ .kind = "counter", .key = "c-1" };
+
+    {
+        var store = try SQLiteNodeStore.init(std.testing.allocator, path, .{});
+        defer store.deinit();
+
+        var runtime = core.Runtime.init(std.testing.allocator, store.asStoreProvider(), .{});
+        defer runtime.deinit();
+        try runtime.registerFactory("counter", core.Factory.from(CounterService, CounterService.create));
+
+        const first = (try runtime.request(addr, 800, "inc")) orelse return error.ExpectedReply;
+        defer first.deinit();
+        try std.testing.expectEqualStrings("1", first.bytes);
+    }
+
+    {
+        var store = try SQLiteNodeStore.init(std.testing.allocator, path, .{});
+        defer store.deinit();
+
+        var runtime = core.Runtime.init(std.testing.allocator, store.asStoreProvider(), .{});
+        defer runtime.deinit();
+        try runtime.registerFactory("counter", core.Factory.from(CounterService, CounterService.create));
+
+        // Recovery replays the mutation; the retry's freshly computed reply
+        // would be "2", but the stored reply from before the restart wins and
+        // apply() does not run a second time for this message ID.
+        const duplicate = (try runtime.request(addr, 800, "inc")) orelse return error.ExpectedReply;
+        defer duplicate.deinit();
+        try std.testing.expectEqualStrings("1", duplicate.bytes);
+
+        const view = (try runtime.request(addr, 801, "get")) orelse return error.ExpectedReply;
+        defer view.deinit();
+        try std.testing.expectEqualStrings("1", view.bytes);
+
+        // A new mutation appends the next sequence without SequenceConflict.
+        const second = (try runtime.request(addr, 802, "inc")) orelse return error.ExpectedReply;
+        defer second.deinit();
+        try std.testing.expectEqualStrings("2", second.bytes);
+
+        const counts = try store.sampleTableRowCounts();
+        try std.testing.expectEqual(@as(u64, 2), counts.actor_wal);
+        try std.testing.expectEqual(@as(u64, 2), counts.actor_seen_message);
+    }
+}
+
+test "sqlite post-append apply failure recovers across restart" {
+    counter_control = .{};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try tmpSQLitePath(std.testing.allocator, &tmp, "apply-failure.sqlite3");
+    defer std.testing.allocator.free(path);
+
+    const addr = core.Address{ .kind = "counter", .key = "c-2" };
+
+    {
+        var store = try SQLiteNodeStore.init(std.testing.allocator, path, .{});
+        defer store.deinit();
+
+        var runtime = core.Runtime.init(std.testing.allocator, store.asStoreProvider(), .{});
+        defer runtime.deinit();
+        try runtime.registerFactory("counter", core.Factory.from(CounterService, CounterService.create));
+
+        counter_control.fail_apply_remaining = 1;
+        try std.testing.expectError(
+            core.Runtime.Error.PostAppendApplyFailed,
+            runtime.request(addr, 900, "inc"),
+        );
+
+        // The mutation and reply are durable; no snapshot captured the
+        // suspect in-memory state because the activation was discarded.
+        const counts = try store.sampleTableRowCounts();
+        try std.testing.expectEqual(@as(u64, 1), counts.actor_wal);
+        try std.testing.expectEqual(@as(u64, 1), counts.actor_seen_message);
+        try std.testing.expectEqual(@as(u64, 0), counts.actor_snapshot);
+    }
+
+    {
+        var store = try SQLiteNodeStore.init(std.testing.allocator, path, .{});
+        defer store.deinit();
+
+        var runtime = core.Runtime.init(std.testing.allocator, store.asStoreProvider(), .{});
+        defer runtime.deinit();
+        try runtime.registerFactory("counter", core.Factory.from(CounterService, CounterService.create));
+
+        // The same-ID retry recovers (replaying the mutation once) and then
+        // returns the stored reply.
+        const retry = (try runtime.request(addr, 900, "inc")) orelse return error.ExpectedReply;
+        defer retry.deinit();
+        try std.testing.expectEqualStrings("1", retry.bytes);
+
+        const view = (try runtime.request(addr, 901, "get")) orelse return error.ExpectedReply;
+        defer view.deinit();
+        try std.testing.expectEqualStrings("1", view.bytes);
+
+        const second = (try runtime.request(addr, 902, "inc")) orelse return error.ExpectedReply;
+        defer second.deinit();
+        try std.testing.expectEqualStrings("2", second.bytes);
+    }
+}
+
+test "sqlite store rejects duplicate sequences with SequenceConflict" {
+    // Parity contract with MemoryNodeStore: appending an already-used
+    // sequence for an actor is a caller-state bug and must fail loudly.
+    var store = try SQLiteNodeStore.init(std.testing.allocator, ":memory:", .{});
+    defer store.deinit();
+
+    const provider = store.asStoreProvider();
+    const scope = try provider.open(std.testing.allocator, "7:counter:seq");
+    defer scope.destroy(std.testing.allocator);
+
+    _ = try scope.appendOnce(std.testing.allocator, .{ .message_id = 1, .seq = 1, .mutation = "inc" });
+    try std.testing.expectError(error.SequenceConflict, scope.appendOnce(std.testing.allocator, .{
+        .message_id = 2,
+        .seq = 1,
+        .mutation = "inc",
+    }));
+    _ = try scope.appendOnce(std.testing.allocator, .{ .message_id = 3, .seq = 2, .mutation = "inc" });
+}
+
+test "sqlite probe reports presence without creating rows" {
+    counter_control = .{};
+    var store = try SQLiteNodeStore.init(std.testing.allocator, ":memory:", .{});
+    defer store.deinit();
+
+    const provider = store.asStoreProvider();
+    try std.testing.expect(!(try provider.probeObject("7:counter:p")));
+
+    var runtime = core.Runtime.init(std.testing.allocator, provider, .{
+        .snapshot_every = 1,
+    });
+    defer runtime.deinit();
+    try runtime.registerFactory("counter", core.Factory.from(CounterService, CounterService.create));
+
+    const addr = core.Address{ .kind = "counter", .key = "p" };
+
+    // A read-only request opens the scope but records nothing durable.
+    const view = (try runtime.request(addr, 1, "get")) orelse return error.ExpectedReply;
+    view.deinit();
+    try std.testing.expect(!(try provider.probeObject("7:counter:p")));
+
+    // After a mutation (snapshot written, WAL compacted), the actor is
+    // present via the snapshot and seen-message tables.
+    const reply = (try runtime.request(addr, 2, "inc")) orelse return error.ExpectedReply;
+    reply.deinit();
+    try std.testing.expect(try provider.probeObject("7:counter:p"));
+
+    const counts = try store.sampleTableRowCounts();
+    try std.testing.expectEqual(@as(u64, 0), counts.actor_wal);
+    try std.testing.expectEqual(@as(u64, 1), counts.actor_snapshot);
+    try std.testing.expectEqual(@as(u64, 1), counts.actor_seen_message);
 }
 
 test "sqlite store applies explicit wal autocheckpoint config" {

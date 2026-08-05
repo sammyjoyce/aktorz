@@ -84,8 +84,14 @@ const Bridge = struct {
         self.last_error = null;
     }
 
-    fn setLastError(self: *Bridge, message: []const u8) void {
-        self.clearLastError();
+    /// Records an error message only when none is held yet. Within one
+    /// exported runtime operation the first callback failure is the root
+    /// cause; later failures from cleanup callbacks (for example `destroy()`
+    /// while discarding a failed activation) must not replace it. The held
+    /// message is cleared at the start of each exported runtime operation and
+    /// after it has been copied into a native result.
+    fn recordError(self: *Bridge, message: []const u8) void {
+        if (self.last_error != null) return;
         self.last_error = self.alloc.dupe(u8, message) catch null;
     }
 
@@ -103,7 +109,6 @@ const Bridge = struct {
         input1: []const u8,
         input2: []const u8,
     ) !core.OwnedBytes {
-        self.clearLastError();
         const call_id = self.nextCallId();
         const required = self.dispatch(
             self.context,
@@ -123,7 +128,7 @@ const Bridge = struct {
         }
 
         const required_len = std.math.cast(usize, required) orelse {
-            self.setLastError("TypeScript callback output is too large for this platform");
+            self.recordError("TypeScript callback output is too large for this platform");
             return error.CallbackOutputTooLarge;
         };
         const bytes = try self.alloc.alloc(u8, required_len);
@@ -147,7 +152,7 @@ const Bridge = struct {
                 return error.TypeScriptCallbackFailed;
             }
             if (written != required) {
-                self.setLastError("TypeScript callback changed its output length between ABI calls");
+                self.recordError("TypeScript callback changed its output length between ABI calls");
                 return error.CallbackOutputLengthChanged;
             }
         }
@@ -155,8 +160,24 @@ const Bridge = struct {
         return .{ .allocator = self.alloc, .bytes = bytes };
     }
 
+    /// Fetches the callback error stored under `call_id` on the TypeScript
+    /// side. The fetch always runs so the TypeScript error slot is drained,
+    /// but the message is kept only when no earlier error is held
+    /// (first error wins).
     fn captureError(self: *Bridge, call_id: u64) void {
-        self.clearLastError();
+        const message = self.fetchCallbackError(call_id);
+        if (self.last_error != null) {
+            if (message) |bytes| self.alloc.free(bytes);
+            return;
+        }
+        if (message) |bytes| {
+            self.last_error = bytes;
+        } else {
+            self.recordError("TypeScript actor callback failed");
+        }
+    }
+
+    fn fetchCallbackError(self: *Bridge, call_id: u64) ?[]u8 {
         const required = self.dispatch(
             self.context,
             @intFromEnum(Operation.get_error),
@@ -169,19 +190,10 @@ const Bridge = struct {
             null,
             0,
         );
-        if (required <= 0) {
-            self.setLastError("TypeScript actor callback failed");
-            return;
-        }
+        if (required <= 0) return null;
 
-        const required_len = std.math.cast(usize, required) orelse {
-            self.setLastError("TypeScript callback error is too large for this platform");
-            return;
-        };
-        const message = self.alloc.alloc(u8, required_len) catch {
-            self.setLastError("TypeScript actor callback failed (error allocation failed)");
-            return;
-        };
+        const required_len = std.math.cast(usize, required) orelse return null;
+        const message = self.alloc.alloc(u8, required_len) catch return null;
         const written = self.dispatch(
             self.context,
             @intFromEnum(Operation.get_error),
@@ -196,10 +208,9 @@ const Bridge = struct {
         );
         if (written != required) {
             self.alloc.free(message);
-            self.setLastError("TypeScript actor callback failed (error transfer failed)");
-            return;
+            return null;
         }
-        self.last_error = message;
+        return message;
     }
 };
 

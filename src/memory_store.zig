@@ -86,6 +86,13 @@ const MemoryScopedStore = struct {
             return .{ .duplicate = if (seen.reply) |reply| try core.OwnedBytes.clone(alloc, reply) else null };
         }
 
+        // Parity with the SQLite backend's (object_id, seq) primary key: a
+        // duplicate or regressing sequence is a caller-state bug and must
+        // fail loudly instead of silently recording malformed replay history.
+        if (self.object.wal.items.len > 0 and intent.seq <= self.object.wal.items[self.object.wal.items.len - 1].seq) {
+            return error.SequenceConflict;
+        }
+
         const mutation_copy = try self.object.alloc.dupe(u8, intent.mutation);
         errdefer self.object.alloc.free(mutation_copy);
 
@@ -159,12 +166,21 @@ pub const MemoryNodeStore = struct {
         return .{
             .ptr = self,
             .open_fn = openErased,
+            .probe_fn = probeErased,
         };
     }
 
     fn openErased(ctx: *anyopaque, alloc: Allocator, object_id: []const u8) anyerror!core.ScopedStore {
         const self: *MemoryNodeStore = @ptrCast(@alignCast(ctx));
         return try self.openScoped(alloc, object_id);
+    }
+
+    /// Reports presence without materializing an entry. An object opened but
+    /// never written (a phantom created by `openScoped`) reports absent.
+    fn probeErased(ctx: *anyopaque, object_id: []const u8) anyerror!bool {
+        const self: *MemoryNodeStore = @ptrCast(@alignCast(ctx));
+        const object = self.objects.get(object_id) orelse return false;
+        return object.snapshot != null or object.wal.items.len > 0 or object.seen.count() > 0;
     }
 
     fn openScoped(self: *MemoryNodeStore, alloc: Allocator, object_id: []const u8) !core.ScopedStore {

@@ -22,4 +22,5 @@ pub const TcpGateway = @import("tiny_gateway.zig").TcpGateway;
 test {
     _ = @import("memory_store.zig");
     _ = @import("tiny_gateway.zig");
+    _ = @import("core_test.zig");
 }

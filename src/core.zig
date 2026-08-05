@@ -34,8 +34,22 @@ pub fn allocObjectId(alloc: Allocator, address: Address) Allocator.Error![]u8 {
     return std.fmt.allocPrint(alloc, "{d}:{s}:{s}", .{ address.kind.len, address.kind, address.key });
 }
 
+/// Result of one `Service.decide()` invocation.
+///
+/// `decide()` runs before duplicate detection and can run again when a caller
+/// retries a message ID. A non-null `mutation` opts this attempt into the
+/// scoped store's per-actor message-ID deduplication path; a null `mutation`
+/// is neither looked up nor recorded, and its reply is returned directly.
+/// See docs/deduplication.md for the exact boundary.
 pub const Decision = struct {
+    /// State-transition bytes to append before live application. When
+    /// `appendOnce()` reports a duplicate, these bytes are discarded and
+    /// `Service.apply()` is not called for this request attempt.
     mutation: ?OwnedBytes = null,
+    /// Optional response bytes. For a newly appended mutation this reply is
+    /// stored with the message ID; for a duplicate mutating decision the
+    /// runtime discards this value and returns the stored reply. Replies from
+    /// decisions without mutations are never stored.
     reply: ?OwnedBytes = null,
 
     pub fn deinit(self: *Decision) void {
@@ -54,6 +68,23 @@ pub const Service = struct {
         load_snapshot: *const fn (ctx: *anyopaque, bytes: []const u8) anyerror!void,
         make_snapshot: *const fn (ctx: *anyopaque, alloc: Allocator) anyerror!OwnedBytes,
         decide: *const fn (ctx: *anyopaque, alloc: Allocator, message: []const u8) anyerror!Decision,
+        /// Applies a mutation that is already persisted.
+        ///
+        /// The runtime invokes this callback after `appendOnce()` commits a
+        /// live mutation and again while reconstructing an activation from
+        /// its snapshot and mutation log. Implementations must complete
+        /// synchronously, be deterministic and replay-safe, mutate only the
+        /// service's in-memory state, and perform no externally visible side
+        /// effects. Domain rejection belongs in `decide()`.
+        ///
+        /// For every mutation persisted by compatible service code, `apply()`
+        /// is required to succeed. The error union is a containment boundary:
+        /// if `apply()` fails after a live append, the runtime discards the
+        /// activation without snapshotting it and returns
+        /// `Runtime.Error.PostAppendApplyFailed`; if it fails while recovering
+        /// durable state, the actor is quarantined and requests return
+        /// `Runtime.Error.PoisonedActor` until `Runtime.retryPoisoned()` or a
+        /// process restart succeeds.
         apply: *const fn (ctx: *anyopaque, mutation: []const u8) anyerror!void,
     };
 
@@ -136,6 +167,12 @@ pub const Factory = struct {
     }
 };
 
+/// Per-actor durability boundary.
+///
+/// Store callbacks are non-reentrant with respect to the runtime: an
+/// implementation must not call back into `Runtime` (request, tell,
+/// passivate) from any vtable method, mirroring the reentrancy rule for
+/// `Service.decide()`.
 pub const ScopedStore = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
@@ -226,6 +263,19 @@ pub const ScopedStore = struct {
         try self.vtable.replay_after(self.ptr, after_seq, replay_ctx, replay_fn);
     }
 
+    /// Atomically records one mutation and its optional reply for this scope.
+    ///
+    /// `intent.message_id` is a per-actor deduplication key; the same numeric
+    /// ID may be used independently by another actor. Returns `.inserted`
+    /// only when the mutation was newly recorded. If the message ID is
+    /// already retained, returns `.duplicate` with the stored optional reply
+    /// and must not append a second mutation. The original request payload is
+    /// not stored or compared, so conflicting payload reuse is not detected.
+    ///
+    /// The built-in stores return an error only when the append definitely
+    /// did not commit. A store that cannot promise that must document its
+    /// failures as ambiguous: the caller then retries the same message ID and
+    /// the deduplication ledger reconciles the outcome.
     pub fn appendOnce(self: ScopedStore, alloc: Allocator, intent: AppendIntent) !AppendResult {
         return try self.vtable.append_once(self.ptr, alloc, intent);
     }
@@ -234,6 +284,12 @@ pub const ScopedStore = struct {
         try self.vtable.write_snapshot(self.ptr, at_seq, bytes);
     }
 
+    /// Removes mutation-log records below `first_live_seq`.
+    ///
+    /// Compaction must not remove the last representation required to recover
+    /// any mutation covered by the current snapshot, and it deliberately does
+    /// not touch the deduplication ledger: seen-message records outlive their
+    /// compacted mutations so duplicate suppression survives snapshotting.
     pub fn compactBefore(self: ScopedStore, first_live_seq: u64) !void {
         try self.vtable.compact_before(self.ptr, first_live_seq);
     }
@@ -242,9 +298,25 @@ pub const ScopedStore = struct {
 pub const StoreProvider = struct {
     ptr: *anyopaque,
     open_fn: *const fn (ctx: *anyopaque, alloc: Allocator, object_id: []const u8) anyerror!ScopedStore,
+    /// Optional existence probe. Backends that can answer without
+    /// materializing state should implement it; the default keeps existing
+    /// initializers valid and reports `ObjectProbeUnsupported`.
+    probe_fn: ?*const fn (ctx: *anyopaque, object_id: []const u8) anyerror!bool = null,
+
+    pub const ProbeError = error{ObjectProbeUnsupported};
 
     pub fn open(self: StoreProvider, alloc: Allocator, object_id: []const u8) !ScopedStore {
         return try self.open_fn(self.ptr, alloc, object_id);
+    }
+
+    /// Reports whether the object has durable state or durable retry history.
+    ///
+    /// Never creates or materializes the object. This is the supported
+    /// existence check; `open()` followed by `loadSnapshot()` is not, because
+    /// backends such as `MemoryNodeStore` materialize an empty entry on open.
+    pub fn probeObject(self: StoreProvider, object_id: []const u8) !bool {
+        const probe = self.probe_fn orelse return ProbeError.ObjectProbeUnsupported;
+        return try probe(self.ptr, object_id);
     }
 };
 
@@ -318,6 +390,10 @@ pub const Runtime = struct {
     tick: u64,
     factories: std.StringHashMap(Factory),
     activations: std.StringHashMap(*Activation),
+    /// Process-local quarantine tombstones, keyed by owned object IDs. An
+    /// entry means recovery failed deterministically for that actor; requests
+    /// return `Error.PoisonedActor` without re-running recovery.
+    poisoned: std.StringHashMap(void),
 
     pub const Config = struct {
         resolver: ?Resolver = null,
@@ -329,6 +405,19 @@ pub const Runtime = struct {
         UnknownKind,
         MissingForwarder,
         ReentrantRequest,
+        /// This request's mutation and optional reply were already committed
+        /// by `appendOnce()`, but the in-memory `apply()` failed. The
+        /// activation has been discarded without snapshotting; retry the same
+        /// message ID to recover and receive the stored reply. This error
+        /// value is reserved by the runtime: services should not return it
+        /// from their own callbacks.
+        PostAppendApplyFailed,
+        /// Recovery (snapshot decode or mutation replay) failed before this
+        /// request reached `decide()`; no mutation was appended. Requests
+        /// keep failing without re-running recovery until `retryPoisoned()`
+        /// or a process restart succeeds. Poison is process-local and never
+        /// persisted.
+        PoisonedActor,
     };
 
     pub fn init(alloc: Allocator, store_provider: StoreProvider, config: Config) Runtime {
@@ -341,6 +430,7 @@ pub const Runtime = struct {
             .tick = 0,
             .factories = std.StringHashMap(Factory).init(alloc),
             .activations = std.StringHashMap(*Activation).init(alloc),
+            .poisoned = std.StringHashMap(void).init(alloc),
         };
     }
 
@@ -355,6 +445,20 @@ pub const Runtime = struct {
         try self.factories.put(key, factory);
     }
 
+    /// Processes one request for an actor and returns an optional owned
+    /// reply. The caller owns the reply and must call `deinit()` on it.
+    ///
+    /// `decide()` runs for every locally processed attempt. When the current
+    /// decision contains a mutation, `message_id` is a per-actor
+    /// deduplication key: a new ID records the mutation and optional reply
+    /// before `apply()` runs, while an already recorded ID skips the second
+    /// append and live `apply()` and returns the first stored optional
+    /// reply. Decisions without mutations are neither looked up nor
+    /// recorded, even when the same message ID previously recorded a
+    /// mutation, so read-style retries may observe newer state. Use one
+    /// `(address, message_id)` pair for one logical request with stable
+    /// payload bytes; conflicting payload reuse is not detected. Remote
+    /// routes delegate these semantics to the configured `Forwarder`.
     pub fn request(self: *Runtime, address: Address, message_id: u128, payload: []const u8) !?OwnedBytes {
         self.tick +%= 1;
 
@@ -375,14 +479,29 @@ pub const Runtime = struct {
         if (activation.running) return Error.ReentrantRequest;
 
         activation.last_touched = self.tick;
+        var payload_copy: ?OwnedBytes = try OwnedBytes.clone(self.alloc, payload);
+        errdefer if (payload_copy) |copy| copy.deinit();
         try activation.mailbox.append(self.alloc, .{
             .message_id = message_id,
-            .payload = try OwnedBytes.clone(self.alloc, payload),
+            .payload = payload_copy.?,
         });
+        // The mailbox owns the clone now; processMailbox frees it with the
+        // queued item, so the errdefer must not fire past this point.
+        payload_copy = null;
 
-        return try self.processMailbox(activation);
+        return self.processMailbox(activation) catch |err| {
+            if (err == Error.PostAppendApplyFailed) {
+                // The mutation is durable but in-memory state is suspect:
+                // discard without snapshotting so the next request rebuilds
+                // from the snapshot and mutation log.
+                self.discardActivation(activation);
+            }
+            return err;
+        };
     }
 
+    /// Equivalent to `request()` with the same deduplication boundary, but
+    /// discards and frees any returned reply.
     pub fn tell(self: *Runtime, address: Address, message_id: u128, payload: []const u8) !void {
         if (try self.request(address, message_id, payload)) |reply| {
             reply.deinit();
@@ -427,12 +546,35 @@ pub const Runtime = struct {
         }
     }
 
+    /// Clears a poison tombstone and makes exactly one new recovery attempt.
+    ///
+    /// Returns false when the actor is not poisoned. On success the actor is
+    /// active again; when recovery fails again the actor is re-poisoned and
+    /// the recovery error is returned. Re-register a corrected factory first
+    /// to deploy a fix without restarting the runtime.
+    pub fn retryPoisoned(self: *Runtime, address: Address) !bool {
+        const object_id = try allocObjectId(self.alloc, address);
+        defer self.alloc.free(object_id);
+
+        const removed = self.poisoned.fetchRemove(object_id) orelse return false;
+        self.alloc.free(removed.key);
+
+        _ = try self.getOrActivate(address);
+        return true;
+    }
+
     pub fn deinit(self: *Runtime) void {
         var activation_it = self.activations.iterator();
         while (activation_it.next()) |entry| {
             entry.value_ptr.*.destroy(self.alloc);
         }
         self.activations.deinit();
+
+        var poisoned_it = self.poisoned.iterator();
+        while (poisoned_it.next()) |entry| {
+            self.alloc.free(entry.key_ptr.*);
+        }
+        self.poisoned.deinit();
 
         var factory_it = self.factories.iterator();
         while (factory_it.next()) |entry| {
@@ -452,14 +594,35 @@ pub const Runtime = struct {
 
     fn getOrActivate(self: *Runtime, address: Address) !*Activation {
         const object_id = try allocObjectId(self.alloc, address);
-        errdefer self.alloc.free(object_id);
+        var object_id_owned = true;
+        defer if (object_id_owned) self.alloc.free(object_id);
 
         if (self.activations.get(object_id)) |activation| {
-            self.alloc.free(object_id);
             return activation;
         }
 
+        if (self.poisoned.contains(object_id)) return Error.PoisonedActor;
+
+        const activation = try self.allocateActivation(address, object_id);
+        // The activation owns object_id from here; exactly one cleanup owner.
+        object_id_owned = false;
+        var activation_owned = true;
+        defer if (activation_owned) activation.destroy(self.alloc);
+
+        try self.recoverActivation(activation);
+
+        try self.activations.put(activation.object_id, activation);
+        activation_owned = false;
+        return activation;
+    }
+
+    /// Creates the service, opens the scoped store, and initializes the
+    /// activation struct. Takes ownership of `object_id` only on success; no
+    /// fallible operation runs after the ownership transfer, so the caller
+    /// owns cleanup through exactly one mechanism (`Activation.destroy`).
+    fn allocateActivation(self: *Runtime, address: Address, object_id: []u8) !*Activation {
         const factory = self.factories.get(address.kind) orelse return Error.UnknownKind;
+
         const service = try factory.create(self.alloc, address);
         errdefer service.destroy(self.alloc);
 
@@ -473,7 +636,6 @@ pub const Runtime = struct {
         errdefer self.alloc.free(kind_copy);
 
         const key_copy = try self.alloc.dupe(u8, address.key);
-        errdefer self.alloc.free(key_copy);
 
         activation.* = .{
             .kind = kind_copy,
@@ -487,19 +649,55 @@ pub const Runtime = struct {
             .dirty_ops = 0,
             .last_touched = self.tick,
         };
-        errdefer activation.destroy(self.alloc);
+        return activation;
+    }
 
+    /// Rebuilds in-memory state from the scoped store.
+    ///
+    /// A *service* callback failure (snapshot decode or replay `apply()`)
+    /// quarantines the actor and returns `Error.PoisonedActor`: durable data
+    /// exists that the current code cannot load, and retrying every request
+    /// would replay the same deterministic failure. *Storage* errors
+    /// propagate unchanged and are transient: the next request retries
+    /// recovery from scratch.
+    fn recoverActivation(self: *Runtime, activation: *Activation) !void {
         if (try activation.store.loadSnapshot(self.alloc)) |snapshot| {
             defer snapshot.bytes.deinit();
-            try activation.service.loadSnapshot(snapshot.bytes.bytes);
+            activation.service.loadSnapshot(snapshot.bytes.bytes) catch {
+                self.markPoisoned(activation.object_id);
+                return Error.PoisonedActor;
+            };
             activation.next_seq = snapshot.last_seq + 1;
         }
 
         var replay_ctx = ReplayContext{ .activation = activation };
-        try activation.store.replayAfter(activation.next_seq - 1, &replay_ctx, ReplayContext.call);
+        activation.store.replayAfter(activation.next_seq - 1, &replay_ctx, ReplayContext.call) catch |err| {
+            if (replay_ctx.service_apply_failed) {
+                self.markPoisoned(activation.object_id);
+                return Error.PoisonedActor;
+            }
+            return err;
+        };
+    }
 
-        try self.activations.put(activation.object_id, activation);
-        return activation;
+    /// Best-effort tombstone insertion. On allocation failure the tombstone
+    /// is skipped: the actor degrades to retrying recovery on each request
+    /// instead of failing fast, which is safe.
+    fn markPoisoned(self: *Runtime, object_id: []const u8) void {
+        if (self.poisoned.contains(object_id)) return;
+        const key = self.alloc.dupe(u8, object_id) catch return;
+        self.poisoned.put(key, {}) catch self.alloc.free(key);
+    }
+
+    /// Destroys an activation without snapshotting it. Used when in-memory
+    /// state can no longer be trusted (post-append `apply()` failure): a
+    /// snapshot taken now could capture partial effects of the failed event
+    /// under an earlier sequence label. The next request reconstructs the
+    /// actor from its snapshot and mutation log.
+    fn discardActivation(self: *Runtime, activation: *Activation) void {
+        if (self.activations.fetchRemove(activation.object_id)) |removed| {
+            removed.value.destroy(self.alloc);
+        }
     }
 
     fn processMailbox(self: *Runtime, activation: *Activation) !?OwnedBytes {
@@ -507,6 +705,7 @@ pub const Runtime = struct {
         defer activation.running = false;
 
         var first_reply: ?OwnedBytes = null;
+        errdefer if (first_reply) |reply| reply.deinit();
 
         while (activation.mailbox.items.len > 0) {
             var item = activation.mailbox.orderedRemove(0);
@@ -530,6 +729,7 @@ pub const Runtime = struct {
 
         var final_reply = decision.reply;
         decision.reply = null;
+        errdefer if (final_reply) |reply| reply.deinit();
 
         if (decision.mutation) |mutation| {
             const append_result = try activation.store.appendOnce(self.alloc, .{
@@ -541,7 +741,14 @@ pub const Runtime = struct {
 
             switch (append_result) {
                 .inserted => {
-                    try activation.service.apply(mutation.bytes);
+                    // The mutation and reply are already durable. A failed
+                    // apply() leaves in-memory state unknown (old, partial,
+                    // or fully mutated), so the caller must discard this
+                    // activation rather than let it serve reads, snapshot,
+                    // or advance its sequence.
+                    activation.service.apply(mutation.bytes) catch {
+                        return Error.PostAppendApplyFailed;
+                    };
                     activation.next_seq += 1;
                     activation.dirty_ops += 1;
                 },
@@ -559,6 +766,12 @@ pub const Runtime = struct {
         return final_reply;
     }
 
+    /// Writes a snapshot at the last applied sequence and compacts the log.
+    ///
+    /// A failure here after a successful `apply()` is a committed-command
+    /// maintenance error, distinct from `Error.PostAppendApplyFailed`: the
+    /// command is durable and in-memory state is consistent, so the
+    /// activation stays mapped and usable and snapshotting is retried later.
     fn snapshotActivation(self: *Runtime, activation: *Activation) !void {
         const snapshot = try activation.service.makeSnapshot(self.alloc);
         defer snapshot.deinit();
@@ -569,29 +782,34 @@ pub const Runtime = struct {
     }
 
     fn passivateByObjectId(self: *Runtime, object_id: []const u8) !bool {
-        if (self.activations.get(object_id)) |activation| {
-            if (activation.running) return Error.ReentrantRequest;
+        const activation = self.activations.get(object_id) orelse return false;
+        if (activation.running) return Error.ReentrantRequest;
+
+        // Snapshot before unmapping: a snapshot failure must leave the
+        // activation reachable and usable, not removed-but-undestroyed.
+        if (activation.dirty_ops > 0) {
+            try self.snapshotActivation(activation);
         }
 
-        if (self.activations.fetchRemove(object_id)) |kv| {
-            const activation = kv.value;
-            if (activation.dirty_ops > 0) {
-                try self.snapshotActivation(activation);
-            }
-            activation.destroy(self.alloc);
-            return true;
-        }
-
-        return false;
+        const removed = self.activations.fetchRemove(object_id).?;
+        removed.value.destroy(self.alloc);
+        return true;
     }
 };
 
 const ReplayContext = struct {
     activation: *Activation,
+    /// Distinguishes a service `apply()` rejection (deterministic; poisons
+    /// the actor) from a storage error that happens to carry the same Zig
+    /// error name (transient; recovery is retried on the next request).
+    service_apply_failed: bool = false,
 
     fn call(ctx: *anyopaque, seq: u64, mutation: []const u8) anyerror!void {
         const self: *ReplayContext = @ptrCast(@alignCast(ctx));
-        try self.activation.service.apply(mutation);
+        self.activation.service.apply(mutation) catch |err| {
+            self.service_apply_failed = true;
+            return err;
+        };
         if (self.activation.next_seq <= seq) {
             self.activation.next_seq = seq + 1;
         }

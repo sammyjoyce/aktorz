@@ -1,7 +1,7 @@
 .{
     .name = .aktorz,
     .fingerprint = 0x968703806a6e24e0,
-    .version = "0.4.0",
+    .version = "0.4.1",
     .minimum_zig_version = "0.16.0-dev.2905",
     .dependencies = .{
         .ziglint = .{

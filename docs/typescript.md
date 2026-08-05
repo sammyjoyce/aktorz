@@ -1,6 +1,6 @@
 # TypeScript bindings
 
-The TypeScript package keeps the actor runtime, mailbox, snapshot cadence, and idempotency implementation in Zig. TypeScript supplies synchronous actor state-machine callbacks through a small versioned C ABI.
+The TypeScript package keeps the actor runtime, mailbox, snapshot cadence, and per-actor mutating-decision deduplication in Zig. TypeScript supplies synchronous actor state-machine callbacks through a small versioned C ABI.
 
 ## Runtime support
 
@@ -81,11 +81,23 @@ const runtime = Runtime.sqlite({
 
 `path` is required and its parent directory must exist. `busyTimeoutMs` defaults to `5_000`. SQLite opens in WAL mode with `synchronous=FULL`; schema creation happens before the constructor returns. Native open and schema errors are transferred through the result-handle ABI and surfaced as JavaScript exceptions carrying the underlying error name, such as `SQLiteCantOpen`.
 
-Calling `close()` performs a clean runtime shutdown, snapshots active actors, closes SQLite, unregisters the callback, and unloads the native library. A new `Runtime.sqlite()` pointed at the same path replays snapshots and WAL mutations. Persisted message IDs continue to deduplicate retries after process restart and return the original persisted reply.
+Calling `close()` performs a clean runtime shutdown, snapshots active actors, closes SQLite, unregisters the callback, and unloads the native library. A new `Runtime.sqlite()` pointed at the same path restores snapshots and replays remaining WAL mutations. The SQLite message-ID ledger also survives the reopen.
 
 Multiple runtimes, memory or SQLite, can be open in one process, and closing one does not disturb the others.
 
-`messageId` is a JavaScript `bigint` in the full unsigned 128-bit range. When a decision persists a mutation, reusing its message ID for the same actor returns the previously persisted reply and does not apply the mutation again.
+## Message IDs and deduplication
+
+`messageId` is a JavaScript `bigint` in the full unsigned 128-bit range and is scoped to one actor address.
+
+When the current `decide()` result contains a mutation, the first occurrence records that mutation and its optional reply. A later attempt with the same actor and message ID that also produces a mutation does not append or live-apply a second mutation; it returns the optional reply stored by the first append.
+
+`decide()` runs before duplicate lookup. A decision without a mutation is not looked up or recorded, so retrying a read re-executes `decide()` and may observe newer state. This is not exactly-once request execution.
+
+Use one message ID for only one logical request to one actor. Reusing it with different payload bytes is invalid and is not currently detected. See [`deduplication.md`](deduplication.md) for the full boundary and retention rules.
+
+## Failure semantics
+
+A thrown `apply()` after the mutation was persisted surfaces as an error whose message is the original thrown message (a later `destroy()` failure during cleanup cannot replace it). The runtime discards the actor instance without snapshotting it; retrying the **same** message ID reconstructs the actor from durable state and returns the stored reply. If recovery itself fails deterministically (a throwing `loadSnapshot` or replay-time `apply`), requests fail with `PoisonedActor` until the service code is fixed and the actor is retried or the process restarts.
 
 ## Native ABI ownership
 

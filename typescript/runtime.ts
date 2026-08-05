@@ -207,7 +207,11 @@ export class Runtime {
     )
   }
 
-  /** Creates an in-memory runtime. State is lost when the process exits. */
+  /**
+   * Creates an in-memory runtime. State and deduplication records survive
+   * actor passivation but are lost when the runtime closes or the process
+   * exits.
+   */
   static memory(options: RuntimeOptions = {}): Runtime {
     requireObject(options, "options")
     if (isSQLiteRuntimeOptions(options)) {
@@ -216,7 +220,11 @@ export class Runtime {
     return new Runtime(options)
   }
 
-  /** Creates a runtime that persists snapshots, mutations, and replies in SQLite. */
+  /**
+   * Creates a runtime that persists snapshots, mutation-log entries, and the
+   * per-actor deduplication records and optional replies created by mutating
+   * decisions.
+   */
   static sqlite(options: SQLiteRuntimeOptions): Runtime {
     requireObject(options, "options")
     requireString(options.path, "path")
@@ -236,6 +244,18 @@ export class Runtime {
     }
   }
 
+  /**
+   * Processes one request synchronously.
+   *
+   * `messageId` is scoped to `address` and participates in deduplication only
+   * when the current `decide()` result contains a mutation: a later mutating
+   * attempt with the same ID skips the second append and live `apply()` and
+   * returns the first stored optional reply. Decisions without mutations are
+   * not looked up or recorded, and `decide()` runs before duplicate
+   * detection, so this is not exactly-once request execution. Reusing the
+   * same actor and message ID with a different payload is invalid and is not
+   * currently detected. See docs/deduplication.md.
+   */
   request(address: ActorAddress, messageId: bigint, payload: BytesLike): Uint8Array | null {
     this.#requireOpen()
     const normalized = normalizeAddress(address)
@@ -247,6 +267,10 @@ export class Runtime {
     )
   }
 
+  /**
+   * Processes a request with the same deduplication semantics as `request()`
+   * and discards any returned reply.
+   */
   tell(address: ActorAddress, messageId: bigint, payload: BytesLike): void {
     this.#requireOpen()
     const normalized = normalizeAddress(address)

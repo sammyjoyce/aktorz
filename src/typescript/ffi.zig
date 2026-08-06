@@ -1,6 +1,5 @@
 const std = @import("std");
-const core = @import("../core.zig");
-const memory = @import("../memory_store.zig");
+const core = @import("durable_actor");
 
 const Allocator = std.mem.Allocator;
 const ABI_VERSION: u32 = 2;
@@ -43,13 +42,13 @@ const NativeResult = struct {
     bytes: []u8,
 
     fn create(kind: ResultKind, bytes: []const u8) !*NativeResult {
-        const result = try page_allocator.create(NativeResult);
-        errdefer page_allocator.destroy(result);
-        result.* = .{
+        const created = try page_allocator.create(NativeResult);
+        errdefer page_allocator.destroy(created);
+        created.* = .{
             .kind = kind,
             .bytes = try page_allocator.dupe(u8, bytes),
         };
-        return result;
+        return created;
     }
 
     fn destroy(self: *NativeResult) void {
@@ -261,7 +260,7 @@ const BridgeService = struct {
 
 const RuntimeHandle = struct {
     bridge: Bridge,
-    store: memory.MemoryNodeStore,
+    store: core.MemoryNodeStore,
     runtime: core.Runtime,
 };
 
@@ -277,7 +276,7 @@ pub export fn aktorz_runtime_create_memory(
     const callback = dispatch orelse return null;
     const handle = page_allocator.create(RuntimeHandle) catch return null;
     handle.bridge = Bridge.init(page_allocator, callback, context);
-    handle.store = memory.MemoryNodeStore.init(page_allocator);
+    handle.store = core.MemoryNodeStore.init(page_allocator);
     handle.runtime = core.Runtime.init(
         page_allocator,
         handle.store.asStoreProvider(),

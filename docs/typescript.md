@@ -1,6 +1,6 @@
 # TypeScript bindings
 
-The TypeScript package keeps the actor runtime, mailbox, snapshot cadence, and per-actor mutating-decision deduplication in Zig. TypeScript supplies synchronous actor state-machine callbacks through a small versioned C ABI.
+The TypeScript package keeps the actor runtime, mailbox, snapshot cadence, and per-actor mutating-decision deduplication in Zig. TypeScript supplies synchronous actor state-machine callbacks through a small versioned C ABI. Runnable examples live in [`examples/typescript/`](../examples/typescript/).
 
 ## Runtime support
 

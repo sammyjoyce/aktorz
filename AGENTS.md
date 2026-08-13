@@ -14,7 +14,7 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - `src/memory_store.zig` — in-memory `StoreProvider` for tests/demos.
 - `src/sqlite_store.zig` — SQLite-backed store (separate `durable_actor_sqlite` module; links libc + the bundled SQLite amalgamation).
 - `src/tiny_gateway.zig` — framed TCP gateway (`TinyGateway`, `TcpGateway`).
-- `examples/` — `cart_example`, `bank_example`, TCP gateways, benchmarks.
+- `examples/` — `cart_example`, `bank_example`, TCP gateways, benchmarks; `examples/typescript/` holds runnable TS examples (own npm package, `aktorz` via `file:../..`, run with `node <file>.ts` on Node 23.6+ or Bun, typecheck with `npm run check`).
 
 ## Code Style
 - Pure Zig, no third-party deps. Follow stdlib conventions: `snake_case` functions/vars, `PascalCase` types.

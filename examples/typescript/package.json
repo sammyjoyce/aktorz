@@ -1,0 +1,21 @@
+{
+  "name": "aktorz-typescript-examples",
+  "private": true,
+  "type": "module",
+  "description": "Runnable TypeScript usage examples for aktorz",
+  "scripts": {
+    "counter": "node counter.ts",
+    "cart": "node cart.ts",
+    "bank": "node bank.ts",
+    "sqlite-durability": "node sqlite-durability.ts",
+    "all": "npm run counter && npm run cart && npm run bank && npm run sqlite-durability",
+    "check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "aktorz": "file:../.."
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "5.8.3"
+  }
+}

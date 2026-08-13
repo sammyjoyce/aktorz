@@ -6,5 +6,6 @@ result
 node_modules/
 dist/
 native/
+examples/typescript/package-lock.json
 *.tgz
 .zig-global/

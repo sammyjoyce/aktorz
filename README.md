@@ -68,7 +68,7 @@ console.log(reply && utf8(reply))
 runtime.close()
 ```
 
-Use `Runtime.memory()` for tests and ephemeral state. `Runtime.sqlite()` uses the same actor API while persisting snapshots, mutation-log entries, and the per-actor deduplication records and optional replies created by mutating decisions across close/reopen cycles. The package loads a self-contained Zig shared library through Koffi on Node.js or `bun:ffi` on Bun. Build the host artifact from a checkout with `npm run build`; cross-build the complete package matrix with `npm run build:native:all`. See [`docs/typescript.md`](docs/typescript.md) for the callback contract, SQLite options, ABI ownership, and packaging details.
+Use `Runtime.memory()` for tests and ephemeral state. `Runtime.sqlite()` uses the same actor API while persisting snapshots, mutation-log entries, and the per-actor deduplication records and optional replies created by mutating decisions across close/reopen cycles. The package loads a self-contained Zig shared library through Koffi on Node.js or `bun:ffi` on Bun. Build the host artifact from a checkout with `npm run build`; cross-build the complete package matrix with `npm run build:native:all`. Runnable TypeScript examples (counter, cart, bank, SQLite durability) live in [`examples/typescript/`](examples/typescript/). See [`docs/typescript.md`](docs/typescript.md) for the callback contract, SQLite options, ABI ownership, and packaging details.
 
 ## Add to your Zig project
 
@@ -130,7 +130,7 @@ const reply = (try runtime.request(
 defer reply.deinit();
 ```
 
-See `examples/cart_example.zig` and `examples/bank_example.zig` for complete working services.
+See `examples/cart_example.zig` and `examples/bank_example.zig` for complete working services, and [`examples/typescript/`](examples/typescript/) for their TypeScript counterparts.
 
 ## Key types
 
@@ -232,6 +232,7 @@ Key flags:
 
 - [`docs/deduplication.md`](docs/deduplication.md) — exact message-ID deduplication boundary, stored replies, and retention
 - [`docs/typescript.md`](docs/typescript.md) — TypeScript API, SQLite runtime, native ABI, and packaging
+- [`examples/typescript/`](examples/typescript/) — runnable TypeScript examples (counter, cart, bank, SQLite durability)
 - [`docs/sqlite_store.md`](docs/sqlite_store.md) — SQLite store design
 - [`docs/sqlite_schema.sql`](docs/sqlite_schema.sql) — SQLite schema
 

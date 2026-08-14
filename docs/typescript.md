@@ -28,7 +28,7 @@ npm run build
 npm run test:node
 ```
 
-`npm run build:native` builds only the current host. `npm run build:native:all` cross-compiles the package artifact matrix. Set `ZIG` to choose a Zig executable.
+`npm run build:native` builds only the current host (`zig build typescript-native`). `npm run build:native:all` cross-compiles the package artifact matrix (`zig build typescript-native-all`). Both steps write into `native/<platform-key>/`. Set `ZIG` to choose a Zig executable. Packaged libraries are stripped `ReleaseFast` binaries; override with `-Dtypescript-optimize=` if you invoke Zig directly.
 
 On Linux, glibc is selected automatically. Set `AKTORZ_LIBC=musl` for Alpine or another musl host. Set `AKTORZ_LIBRARY_PATH=/absolute/path/to/libaktorz.so` (or `.dylib`/`.dll`) to override the packaged library.
 
@@ -120,5 +120,7 @@ native/
   win32-arm64/aktorz.dll
   win32-x64/aktorz.dll
 ```
+
+`typescript/native-spec.ts` is generated at comptime from the canonical `src/typescript/native_spec.zig` table with `zig build typescript-native-spec`; `zig build test` rejects stale generated output.
 
 This follows the same separation used by OpenTUI: a narrow Zig shared-library boundary, runtime-specific FFI loading, and a platform artifact build matrix. aktorz keeps the artifacts in one package for now; the layout can later be split into optional per-platform packages without changing the public TypeScript API or C ABI.

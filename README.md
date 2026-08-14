@@ -183,7 +183,8 @@ Bank account commands: `deposit|<cents>|<memo>`, `withdraw|<cents>|<memo>`, `set
 ```bash
 zig build test           # core + example + TypeScript ABI tests
 zig build sqlite-test    # SQLite + benchmark tests
-zig build typescript-native -Doptimize=ReleaseFast  # self-contained native TypeScript library
+zig build typescript-native            # host TypeScript library into native/<key>/
+zig build typescript-native-all        # packaged TypeScript library matrix
 npm run build            # TypeScript + current-host native artifact
 npm run test:node        # Node.js memory + SQLite integration tests
 npm run test:bun         # Bun memory + SQLite integration tests

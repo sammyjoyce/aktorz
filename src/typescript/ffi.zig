@@ -1,10 +1,9 @@
 const std = @import("std");
 const core = @import("durable_actor");
 const sqlite = @import("durable_actor_sqlite");
+const native_spec = @import("native_spec.zig");
 
 const Allocator = std.mem.Allocator;
-// ziglint-ignore: Z006 - C ABI constant name is part of the public header contract.
-const ABI_VERSION: u32 = 3;
 const page_allocator = std.heap.page_allocator;
 
 const Operation = enum(u32) {
@@ -336,7 +335,7 @@ fn createRuntime(
 
 // ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_abi_version() u32 {
-    return ABI_VERSION;
+    return native_spec.abi_version;
 }
 
 // ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { utf8 } from "./codec.js"
 import { loadBunApi } from "./native-bun.js"
 import { loadNodeApi } from "./native-node.js"
+import { ABI_VERSION, NATIVE_LIBRARY_TARGETS } from "./native-spec.js"
 import {
   EMPTY_BYTES,
   toSafeLength,
@@ -14,8 +15,6 @@ import {
 } from "./native-shared.js"
 
 export type { NativeDispatch } from "./native-shared.js"
-
-const ABI_VERSION = 3
 
 const ResultKind = {
   ok: 0,
@@ -213,20 +212,30 @@ function resolveNativeLibraryPath(override?: string): string {
   return path
 }
 
-function currentNativeTarget(): { key: string; file: string } {
+function currentNativeTarget(): (typeof NATIVE_LIBRARY_TARGETS)[number] {
   const platform = process.platform
   const arch = process.arch
   if (arch !== "x64" && arch !== "arm64") {
     throw new Error(`Unsupported aktorz architecture: ${arch}`)
   }
 
-  if (platform === "darwin") return { key: `darwin-${arch}`, file: "libaktorz.dylib" }
-  if (platform === "win32") return { key: `win32-${arch}`, file: "aktorz.dll" }
-  if (platform === "linux") {
-    const libc = detectLinuxLibc()
-    return { key: `linux-${arch}-${libc}`, file: "libaktorz.so" }
+  const key =
+    platform === "darwin"
+      ? `darwin-${arch}`
+      : platform === "win32"
+        ? `win32-${arch}`
+        : platform === "linux"
+          ? `linux-${arch}-${detectLinuxLibc()}`
+          : null
+  if (key === null) {
+    throw new Error(`Unsupported aktorz platform: ${platform}`)
   }
-  throw new Error(`Unsupported aktorz platform: ${platform}`)
+
+  const target = NATIVE_LIBRARY_TARGETS.find((candidate) => candidate.key === key)
+  if (target === undefined) {
+    throw new Error(`No packaged aktorz native library for ${key}`)
+  }
+  return target
 }
 
 function detectLinuxLibc(): "gnu" | "musl" {

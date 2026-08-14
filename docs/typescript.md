@@ -28,7 +28,7 @@ npm run build
 npm run test:node
 ```
 
-`npm run build:native` builds only the current host. `npm run build:native:all` cross-compiles the package artifact matrix. Set `ZIG` to choose a Zig executable.
+`npm run build:native` builds only the current host (`zig build typescript-native`). `npm run build:native:all` cross-compiles the package artifact matrix (`zig build typescript-native-all`). Both steps write into `native/<platform-key>/`. Set `ZIG` to choose a Zig executable. Packaged libraries are stripped `ReleaseFast` binaries; override with `-Dtypescript-optimize=` if you invoke Zig directly.
 
 On Linux, glibc is selected automatically. Set `AKTORZ_LIBC=musl` for Alpine or another musl host. Set `AKTORZ_LIBRARY_PATH=/absolute/path/to/libaktorz.so` (or `.dylib`/`.dll`) to override the packaged library.
 

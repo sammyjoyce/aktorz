@@ -6,6 +6,7 @@
 - SQLite + benchmark tests: `zig build sqlite-test` (compiles the bundled SQLite amalgamation)
 - TypeScript host library: `zig build typescript-native` (writes `native/<key>/`)
 - TypeScript package matrix: `zig build typescript-native-all`
+- Regenerate TypeScript native spec: `zig build typescript-native-spec`
 - Install example binaries: `zig build install-examples`
 - Run a single test file: add it as a test step in `build.zig`; there is no built-in single-test flag.
 - Benchmarks: `zig build bench`
@@ -17,7 +18,7 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - `src/memory_store.zig` — in-memory `StoreProvider` for tests/demos.
 - `src/sqlite_store.zig` — SQLite-backed store (separate `durable_actor_sqlite` module; links libc + the bundled SQLite amalgamation).
 - `src/tiny_gateway.zig` — framed TCP gateway (`TinyGateway`, `TcpGateway`).
-- `src/typescript/ffi.zig` — C ABI loaded by the TypeScript package; `src/typescript/native_spec.zig` is the ABI/target twin of `typescript/native-spec.ts`.
+- `src/typescript/ffi.zig` — C ABI loaded by the TypeScript package; `src/typescript/native_spec.zig` is the canonical ABI/target spec and generates `typescript/native-spec.ts`.
 - `examples/` — `cart_example`, `bank_example`, TCP gateways, benchmarks; `examples/typescript/` holds runnable TS examples (own npm package, `aktorz` via `file:../..`, run with `node <file>.ts` on Node 23.6+ or Bun, typecheck with `npm run check`).
 
 ## Code Style

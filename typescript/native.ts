@@ -219,16 +219,19 @@ function currentNativeTarget(): (typeof NATIVE_LIBRARY_TARGETS)[number] {
     throw new Error(`Unsupported aktorz architecture: ${arch}`)
   }
 
-  const key =
-    platform === "darwin"
-      ? `darwin-${arch}`
-      : platform === "win32"
-        ? `win32-${arch}`
-        : platform === "linux"
-          ? `linux-${arch}-${detectLinuxLibc()}`
-          : null
-  if (key === null) {
-    throw new Error(`Unsupported aktorz platform: ${platform}`)
+  let key: string
+  switch (platform) {
+    case "darwin":
+      key = `darwin-${arch}`
+      break
+    case "win32":
+      key = `win32-${arch}`
+      break
+    case "linux":
+      key = `linux-${arch}-${detectLinuxLibc()}`
+      break
+    default:
+      throw new Error(`Unsupported aktorz platform: ${platform}`)
   }
 
   const target = NATIVE_LIBRARY_TARGETS.find((candidate) => candidate.key === key)

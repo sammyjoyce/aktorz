@@ -121,4 +121,6 @@ native/
   win32-x64/aktorz.dll
 ```
 
+`typescript/native-spec.ts` is generated at comptime from the canonical `src/typescript/native_spec.zig` table with `zig build typescript-native-spec`; `zig build test` rejects stale generated output.
+
 This follows the same separation used by OpenTUI: a narrow Zig shared-library boundary, runtime-specific FFI loading, and a platform artifact build matrix. aktorz keeps the artifacts in one package for now; the layout can later be split into optional per-platform packages without changing the public TypeScript API or C ABI.

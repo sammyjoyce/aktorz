@@ -27,6 +27,8 @@ pub fn build(b: *std.Build) void {
     const ziglint_dep = b.dependency("ziglint", .{ .optimize = .ReleaseFast });
     const sqlite_source = b.dependency("sqlite3", .{});
 
+    addTypescriptNativeSpecGenerator(b);
+
     const lint_step = ziglint.addLint(b, ziglint_dep, &.{
         b.path("src"),
         b.path("examples"),
@@ -51,24 +53,35 @@ pub fn build(b: *std.Build) void {
     typescript_test_module.addImport("durable_actor", durable_module);
     typescript_test_module.addImport("durable_actor_sqlite", sqlite_module);
 
+    // Build each packaged target once and give both public steps the same
+    // per-destination publisher, so combined invocations cannot race.
+    var typescript_artifacts: [native_spec.targets.len]TypescriptNativeArtifact = undefined;
+    for (native_spec.targets, 0..) |spec, index| {
+        const resolved = resolveNativeQuery(b, spec.zig);
+        const library = addTypescriptNativeLibrary(b, sqlite_source, spec.key, resolved, typescript_optimize);
+        typescript_artifacts[index] = .{
+            .spec = spec,
+            .output = addTypescriptNativeOutput(b, library, spec),
+        };
+    }
+
     const typescript_step = b.step("typescript-native", "Build the native TypeScript FFI library into native/<key>/");
     addSelectedTypescriptNative(
         b,
-        sqlite_source,
         target,
-        typescript_optimize,
         typescript_target_key,
         typescript_step,
+        &typescript_artifacts,
     );
 
     const typescript_all_step = b.step(
         "typescript-native-all",
         "Cross-compile the packaged TypeScript FFI library matrix into native/<key>/",
     );
-    for (native_spec.targets) |spec| {
-        const resolved = resolveNativeQuery(b, spec.zig);
-        const library = addTypescriptNativeLibrary(b, sqlite_source, spec.key, resolved, typescript_optimize);
-        installTypescriptNative(b, library, spec, typescript_all_step);
+    // The matrix is an aggregate of independent target artifacts, not a
+    // filesystem transaction; packaging only proceeds after the group succeeds.
+    for (typescript_artifacts) |artifact| {
+        typescript_all_step.dependOn(&artifact.output.step);
     }
 
     const test_step = b.step("test", "Run unit tests (core + examples + TypeScript ABI)");
@@ -142,6 +155,11 @@ const ExampleOptions = struct {
     install_examples: *std.Build.Step,
 };
 
+const TypescriptNativeArtifact = struct {
+    spec: native_spec.NativeTarget,
+    output: *std.Build.Step.UpdateSourceFiles,
+};
+
 fn addExample(b: *std.Build, options: ExampleOptions) void {
     const root = module(b, options.source, options.target, options.optimize);
     root.addImport("durable_actor", options.durable);
@@ -164,31 +182,33 @@ fn addExample(b: *std.Build, options: ExampleOptions) void {
 
 fn addSelectedTypescriptNative(
     b: *std.Build,
-    sqlite_source: *std.Build.Dependency,
     fallback_target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
     typescript_target_key: ?[]const u8,
     typescript_step: *std.Build.Step,
+    artifacts: *const [native_spec.targets.len]TypescriptNativeArtifact,
 ) void {
-    if (typescript_target_key) |key| {
-        const spec = native_spec.targetByKey(key) orelse {
+    const spec = if (typescript_target_key) |key|
+        native_spec.targetByKey(key) orelse {
             typescript_step.dependOn(&b.addFail(
                 b.fmt("unknown -Dtypescript-target={s}", .{key}),
             ).step);
             return;
+        }
+    else
+        native_spec.targetFor(fallback_target.result) orelse {
+            typescript_step.dependOn(&b.addFail(
+                "typescript-native host target is not in the packaged matrix; pass -Dtypescript-target=<platform-key>",
+            ).step);
+            return;
         };
-        const resolved = resolveNativeQuery(b, spec.zig);
-        const library = addTypescriptNativeLibrary(b, sqlite_source, spec.key, resolved, optimize);
-        installTypescriptNative(b, library, spec, typescript_step);
-        return;
-    }
 
-    const library = addTypescriptNativeLibrary(b, sqlite_source, "host", fallback_target, optimize);
-    if (packagedNativeTarget(fallback_target.result)) |spec| {
-        installTypescriptNative(b, library, spec, typescript_step);
-    } else {
-        typescript_step.dependOn(&b.addInstallArtifact(library, .{}).step);
+    for (artifacts) |artifact| {
+        if (std.mem.eql(u8, artifact.spec.key, spec.key)) {
+            typescript_step.dependOn(&artifact.output.step);
+            return;
+        }
     }
+    unreachable;
 }
 
 fn addTypescriptNativeLibrary(
@@ -226,28 +246,17 @@ fn addTypescriptNativeLibrary(
     });
 }
 
-fn installTypescriptNative(
+fn addTypescriptNativeOutput(
     b: *std.Build,
     library: *std.Build.Step.Compile,
     spec: native_spec.NativeTarget,
-    group: *std.Build.Step,
-) void {
-    const prefix_install = b.addInstallArtifact(library, .{
-        .dest_dir = .{ .override = .{ .custom = b.fmt("native/{s}", .{spec.key}) } },
-        .dest_sub_path = spec.file,
-        .dylib_symlinks = false,
-        .pdb_dir = .disabled,
-        .h_dir = .disabled,
-        .implib_dir = .disabled,
-    });
-    group.dependOn(&prefix_install.step);
-
-    const package_tree = b.addUpdateSourceFiles();
-    package_tree.addCopyFileToSource(
+) *std.Build.Step.UpdateSourceFiles {
+    const output = b.addUpdateSourceFiles();
+    output.addCopyFileToSource(
         library.getEmittedBin(),
         b.fmt("native/{s}/{s}", .{ spec.key, spec.file }),
     );
-    group.dependOn(&package_tree.step);
+    return output;
 }
 
 fn addSqliteLibrary(
@@ -323,42 +332,33 @@ fn module(
     });
 }
 
+fn addTypescriptNativeSpecGenerator(b: *std.Build) void {
+    const update = b.addUpdateSourceFiles();
+    update.addBytesToSource(native_spec.typescript_source, "typescript/native-spec.ts");
+    b.step(
+        "typescript-native-spec",
+        "Regenerate typescript/native-spec.ts from the canonical Zig native spec",
+    ).dependOn(&update.step);
+}
+
 fn addNativeSpecLockstep(b: *std.Build, group: *std.Build.Step) void {
     const ts = b.build_root.handle.readFileAlloc(
         b.graph.io,
         "typescript/native-spec.ts",
         b.allocator,
         .unlimited,
-    ) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => std.debug.panic("unable to read typescript/native-spec.ts: {s}", .{@errorName(err)}),
+    ) catch |err| {
+        group.dependOn(&b.addFail(b.fmt(
+            "unable to read generated typescript/native-spec.ts: {s}",
+            .{@errorName(err)},
+        )).step);
+        return;
     };
 
-    var abi_needle: [64]u8 = undefined;
-    const abi_line = std.fmt.bufPrint(
-        &abi_needle,
-        "export const ABI_VERSION = {d}",
-        .{native_spec.abi_version},
-    ) catch unreachable;
-    if (std.mem.indexOf(u8, ts, abi_line) == null) {
-        group.dependOn(&b.addFail("typescript/native-spec.ts ABI_VERSION drifted from src/typescript/native_spec.zig").step);
-        return;
-    }
-
-    for (native_spec.targets) |spec| {
-        var row_needle: [128]u8 = undefined;
-        const row = std.fmt.bufPrint(
-            &row_needle,
-            "{{ key: \"{s}\", file: \"{s}\" }}",
-            .{ spec.key, spec.file },
-        ) catch unreachable;
-        if (std.mem.indexOf(u8, ts, row) == null) {
-            group.dependOn(&b.addFail(b.fmt(
-                "typescript/native-spec.ts is missing packaged target {s}",
-                .{spec.key},
-            )).step);
-            return;
-        }
+    if (!std.mem.eql(u8, ts, native_spec.typescript_source)) {
+        group.dependOn(&b.addFail(
+            "typescript/native-spec.ts is stale; run `zig build typescript-native-spec`",
+        ).step);
     }
 }
 
@@ -366,28 +366,4 @@ fn resolveNativeQuery(b: *std.Build, zig_triple: []const u8) std.Build.ResolvedT
     const query = std.Target.Query.parse(.{ .arch_os_abi = zig_triple }) catch
         std.debug.panic("invalid packaged native target {s}", .{zig_triple});
     return b.resolveTargetQuery(query);
-}
-
-fn packagedNativeTarget(result: std.Target) ?native_spec.NativeTarget {
-    var key_buf: [32]u8 = undefined;
-    const arch = switch (result.cpu.arch) {
-        .aarch64 => "arm64",
-        .x86_64 => "x64",
-        else => return null,
-    };
-    const key = switch (result.os.tag) {
-        .macos => std.fmt.bufPrint(&key_buf, "darwin-{s}", .{arch}) catch return null,
-        .windows => std.fmt.bufPrint(&key_buf, "win32-{s}", .{arch}) catch return null,
-        .linux => blk: {
-            const libc = if (result.abi.isMusl())
-                "musl"
-            else if (result.abi.isGnu())
-                "gnu"
-            else
-                return null;
-            break :blk std.fmt.bufPrint(&key_buf, "linux-{s}-{s}", .{ arch, libc }) catch return null;
-        },
-        else => return null,
-    };
-    return native_spec.targetByKey(key);
 }

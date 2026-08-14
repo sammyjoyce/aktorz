@@ -17,6 +17,7 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "typescript/native-spec.ts",
         "examples",
         "docs",
         "LICENSE",

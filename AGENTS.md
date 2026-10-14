@@ -1,6 +1,6 @@
 # AGENTS.md — aktorz
 
-## Build & Test (Zig ≥ 0.16.0-dev.2905, Nix flake included)
+## Build & Test (Zig 0.17.0, Nix flake included)
 - Build: `zig build` (modules only; example binaries are not installed by default)
 - All core + example tests: `zig build test`
 - SQLite + benchmark tests: `zig build sqlite-test` (compiles the bundled SQLite amalgamation)
@@ -29,8 +29,8 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 
 ## Testing & Verification
 - Always run `zig build test` (core) **and** `zig build sqlite-test` (SQLite + benchmarks) before committing.
-- For benchmark changes, do a short ReleaseFast smoke test:
-  `zig build -Doptimize=ReleaseFast bench -- --mode sqlite-churn --duration-seconds 1 --num-actors 100`
+- For benchmark changes, do a short fast smoke test:
+  `zig build -Doptimize=fast bench -- --mode sqlite-churn --duration-seconds 1 --actors 100`
 - When adding new reporting/output functions, add a corresponding test that exercises the render path.
 
 ## Lessons Learned

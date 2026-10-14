@@ -1,5 +1,4 @@
 const std = @import("std");
-const ziglint = @import("ziglint");
 const native_spec = @import("src/typescript/native_spec.zig");
 
 const sqlite_c_flags = [_][]const u8{
@@ -11,6 +10,17 @@ const sqlite_c_flags = [_][]const u8{
     "-fvisibility=hidden",
 };
 
+// ziglint has no Zig 0.17 build, so it comes from PATH (the dev shell)
+// instead of a build.zig.zon dependency.
+fn addLint(b: *std.Build, paths: []const []const u8) *std.Build.Step {
+    const run = b.addSystemCommand(&.{"ziglint"});
+    for (paths) |path| run.addDirectoryArg(b.path(path));
+    // Directory arguments do not hash their contents, so never cache a pass.
+    run.has_side_effects = true;
+    run.expectExitCode(0);
+    return &run.step;
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -18,23 +28,17 @@ pub fn build(b: *std.Build) void {
         std.builtin.OptimizeMode,
         "typescript-optimize",
         "Optimize mode for the packaged TypeScript shared library",
-    ) orelse .ReleaseFast;
+    ) orelse .fast;
     const typescript_target_key = b.option(
         []const u8,
         "typescript-target",
         "Packaged native key for typescript-native (for example darwin-arm64)",
     );
-    const ziglint_dep = b.dependency("ziglint", .{ .optimize = .ReleaseFast });
     const sqlite_source = b.dependency("sqlite3", .{});
 
     addTypescriptNativeSpecGenerator(b);
 
-    const lint_step = ziglint.addLint(b, ziglint_dep, &.{
-        b.path("src"),
-        b.path("examples"),
-        b.path("build.zig"),
-    });
-    b.step("lint", "Run ziglint").dependOn(lint_step);
+    b.step("lint", "Run ziglint").dependOn(addLint(b, &.{ "src", "examples", "build.zig" }));
 
     const sqlite_library = addSqliteLibrary(b, sqlite_source, "sqlite3", target, optimize);
     const durable_module = b.addModule("durable_actor", .{
@@ -47,7 +51,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    wireSqliteStore(sqlite_module, durable_module, sqlite_source, sqlite_library);
+    wireSqliteStore(b, sqlite_module, durable_module, sqlite_source, sqlite_library, target, optimize);
 
     const typescript_test_module = module(b, "src/typescript/ffi.zig", target, optimize);
     typescript_test_module.addImport("durable_actor", durable_module);
@@ -174,9 +178,7 @@ fn addExample(b: *std.Build, options: ExampleOptions) void {
     options.install_examples.dependOn(&b.addInstallArtifact(exe, .{}).step);
 
     const run = b.addRunArtifact(exe);
-    if (b.args) |args| {
-        run.addArgs(args);
-    }
+    run.addPassthruArgs();
     b.step(options.step_name, options.step_description).dependOn(&run.step);
 }
 
@@ -227,7 +229,7 @@ fn addTypescriptNativeLibrary(
         optimize,
     );
     const sqlite = module(b, "src/sqlite_store.zig", resolved, optimize);
-    wireSqliteStore(sqlite, durable, sqlite_source, sqlite_library);
+    wireSqliteStore(b, sqlite, durable, sqlite_source, sqlite_library, resolved, optimize);
 
     const root = b.createModule(.{
         .root_source_file = b.path("src/typescript/ffi.zig"),
@@ -285,15 +287,26 @@ fn addSqliteLibrary(
 }
 
 fn wireSqliteStore(
+    b: *std.Build,
     sqlite_module: *std.Build.Module,
     durable_module: *std.Build.Module,
     sqlite_source: *std.Build.Dependency,
     sqlite_library: *std.Build.Step.Compile,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
 ) void {
     sqlite_module.addImport("durable_actor", durable_module);
+    // Zig 0.17 removed @cImport. Translate the amalgamation's header here
+    // and hand the store the bindings as the `sqlite_c` module.
+    const translate = b.addTranslateC(.{
+        .root_source_file = sqlite_source.path("sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sqlite_module.addImport("sqlite_c", translate.createModule());
     // The store links the bundled amalgamation, so importing this module is
-    // enough: dependents inherit the include path, libc, and the SQLite library.
-    sqlite_module.addIncludePath(sqlite_source.path(""));
+    // enough: dependents inherit libc and the SQLite library.
     sqlite_module.link_libc = true;
     sqlite_module.linkLibrary(sqlite_library);
 }
@@ -342,7 +355,8 @@ fn addTypescriptNativeSpecGenerator(b: *std.Build) void {
 }
 
 fn addNativeSpecLockstep(b: *std.Build, group: *std.Build.Step) void {
-    const ts = b.build_root.handle.readFileAlloc(
+    b.dependOnFileContents(b.path("typescript/native-spec.ts"));
+    const ts = b.root.root_dir.handle.readFileAlloc(
         b.graph.io,
         "typescript/native-spec.ts",
         b.allocator,

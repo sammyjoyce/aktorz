@@ -212,8 +212,8 @@ pub fn modeName(mode: BenchmarkMode) []const u8 {
 }
 
 fn parseMode(text: []const u8) ?BenchmarkMode {
-    inline for (std.meta.fields(BenchmarkMode)) |field| {
-        const mode = @field(BenchmarkMode, field.name);
+    inline for (@typeInfo(BenchmarkMode).@"enum".field_names) |name| {
+        const mode = @field(BenchmarkMode, name);
         if (std.mem.eql(u8, text, modeName(mode))) return mode;
     }
     return null;
@@ -276,7 +276,7 @@ fn sqliteArtifactExists(path: []const u8) !bool {
 }
 
 fn pathExists(path: []const u8) !bool {
-    const path_z = try std.heap.page_allocator.dupeZ(u8, path);
+    const path_z = try std.heap.page_allocator.dupeSentinel(u8, path, 0);
     defer std.heap.page_allocator.free(path_z);
 
     switch (std.c.errno(std.c.faccessat(std.c.AT.FDCWD, path_z.ptr, 0, 0))) {
@@ -322,7 +322,7 @@ fn ensureBenchCacheDir() !void {
 }
 
 fn mkdirIfNeeded(path: []const u8) !void {
-    const path_z = try std.heap.page_allocator.dupeZ(u8, path);
+    const path_z = try std.heap.page_allocator.dupeSentinel(u8, path, 0);
     defer std.heap.page_allocator.free(path_z);
 
     switch (std.c.errno(std.c.mkdir(path_z.ptr, 0o755))) {

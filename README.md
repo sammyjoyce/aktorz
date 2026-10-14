@@ -19,7 +19,7 @@ Aktorz provides per-actor mutating-decision deduplication with stored-reply retu
 
 ## Quick start
 
-Requires **Zig 0.16.0-dev.2905** or later. A Nix flake is included:
+Requires **Zig 0.17.0**. A Nix flake is included:
 
 ```bash
 nix develop           # enter the dev shell
@@ -174,7 +174,7 @@ content-length: <decimal-usize>
 | `zig build cart-gateway` | In-memory cart service on port 7070 |
 | `zig build cart-sqlite-gateway -- actors.sqlite3` | SQLite-backed cart service |
 | `zig build bank-gateway` | Bank account with freeze/close lifecycle |
-| `zig build -Doptimize=ReleaseFast bench` | Benchmark runner (default: SQLite suite) |
+| `zig build -Doptimize=fast bench` | Benchmark runner (default: SQLite suite) |
 
 Bank account commands: `deposit|<cents>|<memo>`, `withdraw|<cents>|<memo>`, `set_overdraft|<cents>`, `freeze|<reason>`, `unfreeze`, `close`, `balance`, `statement`.
 
@@ -188,14 +188,14 @@ zig build typescript-native-all        # packaged TypeScript library matrix
 npm run build            # TypeScript + current-host native artifact
 npm run test:node        # Node.js memory + SQLite integration tests
 npm run test:bun         # Bun memory + SQLite integration tests
-zig build -Doptimize=ReleaseFast bench                   # default SQLite suite
-zig build -Doptimize=ReleaseFast bench -- --mode micro --scenario memory_hot --ops 1000000
+zig build -Doptimize=fast bench                   # default SQLite suite
+zig build -Doptimize=fast bench -- --mode micro --scenario memory_hot --ops 1000000
 ```
 
 Benchmark runner:
 
 ```bash
-zig build -Doptimize=ReleaseFast bench
+zig build -Doptimize=fast bench
 ```
 
 That default run now executes the SQLite scale suite in `--mode sqlite-suite`. If you omit `--sqlite-path`, the benchmark creates fresh database files under `.zig-cache/bench/`.
@@ -203,9 +203,9 @@ That default run now executes the SQLite scale suite in `--mode sqlite-suite`. I
 Recommended invocations:
 
 ```bash
-zig build -Doptimize=ReleaseFast bench -- --mode micro --scenario memory_hot --ops 1000000
-zig build -Doptimize=ReleaseFast bench -- --mode sqlite-suite --sqlite-path actors-bench.sqlite3
-zig build -Doptimize=ReleaseFast bench -- --mode sqlite-reactivate --actors 1000 --history-preload 256 --sqlite-path actors-bench.sqlite3
+zig build -Doptimize=fast bench -- --mode micro --scenario memory_hot --ops 1000000
+zig build -Doptimize=fast bench -- --mode sqlite-suite --sqlite-path actors-bench.sqlite3
+zig build -Doptimize=fast bench -- --mode sqlite-reactivate --actors 1000 --history-preload 256 --sqlite-path actors-bench.sqlite3
 ```
 
 Modes:
@@ -220,7 +220,7 @@ Key flags:
 
 - `--actors`, `--duration-seconds`, `--write-percent`, `--passivate-every`, `--snapshot-every`, `--history-preload`, and `--sqlite-path`.
 - `--mode micro` also takes `--scenario` and `--ops`.
-- Legacy positional micro invocations still work during the transition, for example `zig build -Doptimize=ReleaseFast bench -- memory_cold 250000`.
+- Legacy positional micro invocations still work during the transition, for example `zig build -Doptimize=fast bench -- memory_cold 250000`.
 - If you supply `--sqlite-path`, the benchmark refuses to reuse an existing database, WAL, or SHM file. In `sqlite-suite`, the supplied path becomes the base name for phase-local files such as `actors-bench.churn.sqlite3`.
 
 ## Notes

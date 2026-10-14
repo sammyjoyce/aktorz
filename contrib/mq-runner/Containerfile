@@ -23,7 +23,7 @@ RUN curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${Z
 COPY build.zig.zon /tmp/prefetch/build.zig.zon
 RUN cd /tmp/prefetch \
     && touch build.zig \
-    && mkdir -p /opt/zig-packages/tmp \
+    && mkdir -p /opt/zig-packages/tmp /opt/zig-packages/p \
     && ZIG_GLOBAL_CACHE_DIR=/opt/zig-packages zig build --fetch \
     && mv zig-pkg/* /opt/zig-packages/p/ \
     && rm -rf /tmp/prefetch

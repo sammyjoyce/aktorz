@@ -1,7 +1,7 @@
 # Autoresearch: SQLite benchmark performance
 
 ## Objective
-Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig build -Doptimize=ReleaseFast bench -- --mode sqlite-suite`) while preserving benchmark correctness and runtime semantics.
+Reduce end-to-end wall-clock time for the default SQLite benchmark suite (`zig build -Doptimize=fast bench -- --mode sqlite-suite`) while preserving benchmark correctness and runtime semantics.
 
 ## Metrics
 - Primary: Wall-clock benchmark duration (seconds, lower is better)

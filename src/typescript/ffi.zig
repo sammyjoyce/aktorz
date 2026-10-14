@@ -111,7 +111,7 @@ const Bridge = struct {
         const call_id = self.nextCallId();
         const required = self.dispatch(
             self.context,
-            @intFromEnum(operation),
+            @backingInt(operation),
             call_id,
             service_id,
             optionalConstPointer(input1),
@@ -136,7 +136,7 @@ const Bridge = struct {
         if (required_len > 0) {
             const written = self.dispatch(
                 self.context,
-                @intFromEnum(operation),
+                @backingInt(operation),
                 call_id,
                 service_id,
                 optionalConstPointer(input1),
@@ -179,7 +179,7 @@ const Bridge = struct {
     fn fetchCallbackError(self: *Bridge, call_id: u64) ?[]u8 {
         const required = self.dispatch(
             self.context,
-            @intFromEnum(Operation.get_error),
+            @backingInt(Operation.get_error),
             call_id,
             0,
             null,
@@ -195,7 +195,7 @@ const Bridge = struct {
         const message = self.alloc.alloc(u8, required_len) catch return null;
         const written = self.dispatch(
             self.context,
-            @intFromEnum(Operation.get_error),
+            @backingInt(Operation.get_error),
             call_id,
             0,
             null,
@@ -563,8 +563,8 @@ pub export fn aktorz_runtime_shutdown(handle: ?*RuntimeHandle) ?*NativeResult {
 
 // ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
 pub export fn aktorz_result_kind(native_result: ?*const NativeResult) u32 {
-    const value = native_result orelse return @intFromEnum(ResultKind.error_value);
-    return @intFromEnum(value.kind);
+    const value = native_result orelse return @backingInt(ResultKind.error_value);
+    return @backingInt(value.kind);
 }
 
 // ziglint-ignore: Z001 - C ABI symbol name; renaming would break the ABI.
@@ -666,7 +666,7 @@ test "message identifiers retain all 128 bits" {
 }
 
 test "decision envelopes preserve empty present values" {
-    var bytes = [_]u8{0} ** 17;
+    var bytes: [17]u8 = @splat(0);
     bytes[0] = 0b11;
     var decision = try decodeDecision(std.testing.allocator, &bytes);
     defer decision.deinit();

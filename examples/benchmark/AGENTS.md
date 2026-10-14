@@ -2,7 +2,7 @@
 
 ## Structure
 - `benchmark.zig` — entry point, delegates to `cli`, `micro`, `scale`, `report`.
-- `cli.zig` — CLI arg parsing (`--mode`, `--duration-seconds`, `--num-actors`, etc.).
+- `cli.zig` — CLI arg parsing (`--mode`, `--duration-seconds`, `--actors`, etc.).
 - `micro.zig` — micro-benchmark (fast in-memory operations).
 - `scale.zig` — SQLite scale suite (churn / reactivate / soak phases).
 - `histogram.zig` — latency histogram with percentile reporting.
@@ -28,5 +28,5 @@
 
 ## Verification
 - `zig build sqlite-test` runs all benchmark tests.
-- Short smoke: `zig build -Doptimize=ReleaseFast bench -- --mode sqlite-churn --duration-seconds 1 --num-actors 100`
+- Short smoke: `zig build -Doptimize=fast bench -- --mode sqlite-churn --duration-seconds 1 --actors 100`
 - When adding new report output, always add a test in `benchmark_test.zig` for the render path.

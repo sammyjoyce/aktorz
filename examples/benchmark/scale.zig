@@ -530,7 +530,7 @@ fn accumulateStoreCounters(target: *instrumentation.StoreCounters, delta: instru
 }
 
 fn freeResolvedPaths(alloc: Allocator, paths: cli.SqlitePaths) void {
-    inline for (. { paths.base_path, paths.shared_path, paths.churn_path, paths.reactivate_path, paths.soak_path }) |maybe_path| {
+    inline for (.{ paths.base_path, paths.shared_path, paths.churn_path, paths.reactivate_path, paths.soak_path }) |maybe_path| {
         if (maybe_path) |path| alloc.free(path);
     }
 }
@@ -633,7 +633,7 @@ fn hotSetCount(actor_count: usize) usize {
 }
 
 const MessageIds = struct {
-    counters: [4]u64 = [_]u64{0} ** 4,
+    counters: [4]u64 = @splat(0),
 
     const Segment = enum(u8) {
         preload = 1,
@@ -649,8 +649,8 @@ const MessageIds = struct {
     };
 
     fn next(self: *MessageIds, segment: Segment) u128 {
-        const index: usize = @intFromEnum(segment) - 1;
+        const index: usize = @backingInt(segment) - 1;
         self.counters[index] += 1;
-        return (@as(u128, @intFromEnum(segment)) << 112) | @as(u128, self.counters[index]);
+        return (@as(u128, @backingInt(segment)) << 112) | @as(u128, self.counters[index]);
     }
 };

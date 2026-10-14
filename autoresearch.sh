@@ -6,4 +6,4 @@ if ! command -v zig >/dev/null 2>&1; then
   exit 127
 fi
 
-exec zig build -Doptimize=ReleaseFast bench -- --mode sqlite-suite
+exec zig build -Doptimize=fast bench -- --mode sqlite-suite

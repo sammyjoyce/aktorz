@@ -2,9 +2,7 @@ const std = @import("std");
 const durable = @import("durable_actor");
 const core = durable;
 
-const c = @cImport({
-    @cInclude("sqlite3.h");
-});
+const c = @import("sqlite_c");
 
 const Allocator = std.mem.Allocator;
 const empty_byte = [_]u8{0};
@@ -120,7 +118,7 @@ pub const SQLiteNodeStore = struct {
     };
 
     pub fn init(alloc: Allocator, path: []const u8, config: Config) !SQLiteNodeStore {
-        const path_z = try alloc.dupeZ(u8, path);
+        const path_z = try alloc.dupeSentinel(u8, path, 0);
         defer alloc.free(path_z);
 
         var db_opt: ?*c.sqlite3 = null;
@@ -410,7 +408,7 @@ fn execDynamic(db: *c.sqlite3, alloc: Allocator, comptime fmt: []const u8, args:
     const sql = try std.fmt.allocPrint(alloc, fmt, args);
     defer alloc.free(sql);
 
-    const sql_z = try alloc.dupeZ(u8, sql);
+    const sql_z = try alloc.dupeSentinel(u8, sql, 0);
     defer alloc.free(sql_z);
     try execLiteral(db, sql_z);
 }
@@ -612,7 +610,7 @@ test "sqlite store snapshots on shutdown and reopens from durable state" {
     defer gpa.deinit();
     const alloc = gpa.allocator();
 
-    var rng = std.Random.DefaultCsprng.init(.{0} ** 32);
+    var rng = std.Random.DefaultCsprng.init(@splat(0));
     const tmp_name = try std.fmt.allocPrint(alloc, "durable-actor-sqlite-test-{x}.db", .{rng.random().int(u64)});
     defer {
         const z = @as([*:0]const u8, @ptrCast(tmp_name.ptr));

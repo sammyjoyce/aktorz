@@ -40,7 +40,7 @@ Durable actor framework: lazy activation, single-threaded message processing, pl
 - Always pair `init`/`deinit`; prefer `defer obj.deinit()` immediately after creation.
 
 ### Zig 0.16 Stdlib API Gaps
-- `std.fmt.allocPrintZ` does not exist — use `std.fmt.allocPrint` then `dupeZ` if a sentinel-terminated slice is needed.
+- `std.fmt.allocPrintZ` does not exist — use `std.fmt.allocPrint` then `alloc.dupeSentinel(u8, bytes, 0)` if a sentinel-terminated slice is needed (`dupeZ` was removed in Zig 0.17).
 - `std.c.time(null)` is unavailable — use `std.posix.gettimeofday()` and read `.sec` from the `timeval`.
 - `fstatat` returns void for errno — use `std.fs.Dir.cwd().statFile(path)` instead for file size queries.
 
